@@ -12,7 +12,10 @@ class PreviewDocumentPageController < ActionController::API
 
     return head :not_found unless attachment
 
-    preview_image = attachment.preview_images.joins(:blob).find_by(blob: { filename: "#{params[:id]}#{FORMAT}" })
+    @template = attachment.record
+
+    preview_image = attachment.preview_images.joins(:blob)
+                              .find_by(blob: { filename: ["#{params[:id]}.png", "#{params[:id]}.jpg"] })
 
     return redirect_to preview_image.url, allow_other_host: true if preview_image
 

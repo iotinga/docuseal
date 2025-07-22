@@ -1,12 +1,13 @@
 <template>
   <div>
     <label
+      id="add_document_button"
       :for="inputId"
-      class="btn btn-outline w-full"
-      :class="{ 'btn-disabled': isLoading || isProcessing }"
+      class="btn btn-outline w-full add-document-button"
+      :class="{ 'btn-disabled': isLoading }"
     >
       <IconInnerShadowTop
-        v-if="isLoading || isProcessing"
+        v-if="isLoading"
         width="20"
         class="animate-spin"
       />
@@ -16,9 +17,6 @@
       />
       <span v-if="isLoading">
         {{ t('uploading_') }}
-      </span>
-      <span v-else-if="isProcessing">
-        {{ t('processing_') }}
       </span>
       <span v-else>
         {{ t('add_document') }}
@@ -62,53 +60,69 @@ export default {
       default: 'image/*, application/pdf'
     }
   },
-  emits: ['success'],
+  emits: ['success', 'error'],
   data () {
     return {
-      isLoading: false,
-      isProcessing: false
+      isLoading: false
     }
   },
   computed: {
     inputId () {
       return 'el' + Math.random().toString(32).split('.')[1]
+    },
+    uploadUrl () {
+      return `/templates/${this.templateId}/documents`
     }
   },
   methods: {
     async upload () {
       this.isLoading = true
 
-      this.baseFetch(`/templates/${this.templateId}/documents`, {
+      this.baseFetch(this.uploadUrl, {
         method: 'POST',
+        headers: { Accept: 'application/json' },
         body: new FormData(this.$refs.form)
       }).then((resp) => {
         if (resp.ok) {
           resp.json().then((data) => {
             this.$emit('success', data)
             this.$refs.input.value = ''
+            this.isLoading = false
           })
         } else if (resp.status === 422) {
           resp.json().then((data) => {
-            if (data.error === 'PDF encrypted') {
+            if (data.status === 'pdf_encrypted') {
               const formData = new FormData(this.$refs.form)
 
-              formData.append('password', prompt('Enter PDF password'))
+              formData.append('password', prompt(this.t('enter_pdf_password')))
 
-              this.baseFetch(`/templates/${this.templateId}/documents`, {
+              this.baseFetch(this.uploadUrl, {
                 method: 'POST',
                 body: formData
               }).then(async (resp) => {
                 if (resp.ok) {
                   this.$emit('success', await resp.json())
                   this.$refs.input.value = ''
+                  this.isLoading = false
                 } else {
-                  alert('Wrong password')
+                  alert(this.t('wrong_password'))
+
+                  this.$emit('error', await resp.json().error)
+                  this.isLoading = false
                 }
               })
+            } else {
+              this.$emit('error', data.error)
+              this.isLoading = false
             }
           })
+        } else {
+          resp.json().then((data) => {
+            this.$emit('error', data.error)
+            this.isLoading = false
+          })
         }
-      }).finally(() => {
+      }).catch(() => {
         this.isLoading = false
       })
     }

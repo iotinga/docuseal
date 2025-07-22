@@ -1,11 +1,15 @@
 # frozen_string_literal: true
 
-class SendSubmitterInvitationEmailJob < ApplicationJob
+class SendSubmitterInvitationEmailJob
+  include Sidekiq::Job
+
   def perform(params = {})
     submitter = Submitter.find(params['submitter_id'])
 
-    if submitter.submission.source == 'invite' && !Accounts.can_send_emails?(submitter.account, on_events: true)
-      Rollbar.error("Skip email: #{submitter.id}") if defined?(Rollbar)
+    return if submitter.submission.source == 'invite' && !Accounts.can_send_emails?(submitter.account, on_events: true)
+
+    unless Accounts.can_send_invitation_emails?(submitter.account)
+      Rollbar.warning("Skip email: #{submitter.account.id}") if defined?(Rollbar)
 
       return
     end
@@ -19,6 +23,6 @@ class SendSubmitterInvitationEmailJob < ApplicationJob
     SubmissionEvent.create!(submitter:, event_type: 'send_email')
 
     submitter.sent_at ||= Time.current
-    submitter.save
+    submitter.save!
   end
 end

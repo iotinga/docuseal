@@ -2,10 +2,11 @@
 
 source 'https://rubygems.org'
 
-ruby '3.3.1'
+ruby '3.4.2'
 
 gem 'arabic-letter-connector', require: 'arabic-letter-connector/logic'
 gem 'aws-sdk-s3', require: false
+gem 'aws-sdk-secretsmanager', require: false
 gem 'azure-storage-blob', require: false
 gem 'bootsnap', require: false
 gem 'cancancan'
@@ -27,25 +28,25 @@ gem 'pagy'
 gem 'pg', require: false
 gem 'premailer-rails'
 gem 'pretender'
-gem 'puma'
+gem 'puma', require: false
 gem 'rack'
 gem 'rails'
 gem 'rails_autolink'
 gem 'rails-i18n'
 gem 'rotp'
+gem 'rouge', require: false
 gem 'rqrcode'
 gem 'ruby-vips'
 gem 'rubyXL'
 gem 'shakapacker'
-gem 'sidekiq', require: ENV.key?('REDIS_URL')
-gem 'sqlite3', require: false, force_ruby_platform: true
+gem 'sidekiq'
+gem 'sqlite3', require: false
 gem 'strip_attributes'
 gem 'turbo-rails'
 gem 'twitter_cldr', require: false
 gem 'tzinfo-data'
 
 group :development, :test do
-  gem 'annotate'
   gem 'better_html'
   gem 'bullet'
   gem 'debug'
@@ -62,6 +63,9 @@ group :development, :test do
 end
 
 group :development do
+  gem 'annotaterb'
+  gem 'brakeman', require: false
+  gem 'foreman', require: false
   gem 'letter_opener_web'
   gem 'web-console'
 end

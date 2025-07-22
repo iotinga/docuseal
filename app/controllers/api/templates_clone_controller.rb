@@ -5,7 +5,12 @@ module Api
     load_and_authorize_resource :template
 
     def create
-      authorize!(:manage, @template)
+      authorize!(:create, @template)
+
+      ActiveRecord::Associations::Preloader.new(
+        records: [@template],
+        associations: [schema_documents: :preview_images_attachments]
+      ).call
 
       cloned_template = Templates::Clone.call(
         @template,
@@ -16,13 +21,18 @@ module Api
       )
 
       cloned_template.source = :api
+
+      schema_documents = Templates::CloneAttachments.call(template: cloned_template,
+                                                          original_template: @template,
+                                                          documents: params[:documents])
+
       cloned_template.save!
 
-      Templates::CloneAttachments.call(template: cloned_template, original_template: @template)
+      WebhookUrls.enqueue_events(cloned_template, 'template.created')
 
-      SendTemplateCreatedWebhookRequestJob.perform_later(cloned_template)
+      SearchEntries.enqueue_reindex(cloned_template)
 
-      render json: Templates::SerializeForApi.call(cloned_template)
+      render json: Templates::SerializeForApi.call(cloned_template, schema_documents)
     end
   end
 end

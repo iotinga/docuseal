@@ -8,24 +8,24 @@ class SubmissionsDownloadController < ApplicationController
   FILES_TTL = 5.minutes
 
   def index
-    submitter = Submitter.find_signed(params[:sig], purpose: :download_completed) if params[:sig].present?
+    @submitter = Submitter.find_signed(params[:sig], purpose: :download_completed) if params[:sig].present?
 
     signature_valid =
-      if submitter&.slug == params[:submitter_slug]
+      if @submitter&.slug == params[:submitter_slug]
         true
       else
-        submitter = nil
+        @submitter = nil
       end
 
-    submitter ||= Submitter.find_by!(slug: params[:submitter_slug])
+    @submitter ||= Submitter.find_by!(slug: params[:submitter_slug])
 
-    Submissions::EnsureResultGenerated.call(submitter)
+    Submissions::EnsureResultGenerated.call(@submitter)
 
-    last_submitter = submitter.submission.submitters.where.not(completed_at: nil).order(:completed_at).last
+    last_submitter = @submitter.submission.submitters.where.not(completed_at: nil).order(:completed_at).last
+
+    return head :not_found unless last_submitter
 
     Submissions::EnsureResultGenerated.call(last_submitter)
-
-    return head :not_found unless last_submitter.completed_at?
 
     if last_submitter.completed_at < TTL.ago && !signature_valid && !current_user_submitter?(last_submitter)
       Rollbar.info("TTL: #{last_submitter.id}") if defined?(Rollbar)
@@ -33,8 +33,8 @@ class SubmissionsDownloadController < ApplicationController
       return head :not_found
     end
 
-    if params[:combined]
-      url = build_combined_url(submitter)
+    if params[:combined] == 'true'
+      url = build_combined_url(@submitter)
 
       if url
         render json: [url]
@@ -53,8 +53,15 @@ class SubmissionsDownloadController < ApplicationController
   end
 
   def build_urls(submitter)
+    filename_format = AccountConfig.find_or_initialize_by(account_id: submitter.account_id,
+                                                          key: AccountConfig::DOCUMENT_FILENAME_FORMAT_KEY)&.value
+
     Submitters.select_attachments_for_download(submitter).map do |attachment|
-      ActiveStorage::Blob.proxy_url(attachment.blob, expires_at: FILES_TTL.from_now.to_i)
+      ActiveStorage::Blob.proxy_url(
+        attachment.blob,
+        expires_at: FILES_TTL.from_now.to_i,
+        filename: Submitters.build_document_filename(submitter, attachment.blob, filename_format)
+      )
     end
   end
 
@@ -65,6 +72,13 @@ class SubmissionsDownloadController < ApplicationController
     attachment = submitter.submission.combined_document_attachment
     attachment ||= Submissions::GenerateCombinedAttachment.call(submitter)
 
-    ActiveStorage::Blob.proxy_url(attachment.blob, expires_at: FILES_TTL.from_now.to_i)
+    filename_format = AccountConfig.find_or_initialize_by(account_id: submitter.account_id,
+                                                          key: AccountConfig::DOCUMENT_FILENAME_FORMAT_KEY)&.value
+
+    ActiveStorage::Blob.proxy_url(
+      attachment.blob,
+      expires_at: FILES_TTL.from_now.to_i,
+      filename: Submitters.build_document_filename(submitter, attachment.blob, filename_format)
+    )
   end
 end

@@ -13,7 +13,7 @@
         >
         <a
           v-if="val"
-          class="flex items-center space-x-1.5 w-full"
+          class="flex items-center space-x-1.5 w-full attachment-file-name"
           :href="attachmentsIndex[val].url"
           target="_blank"
         >
@@ -26,7 +26,10 @@
             {{ attachmentsIndex[val].filename }}
           </span>
         </a>
-        <button @click.prevent="removeAttachment(val)">
+        <button
+          class="remove-attachment-button"
+          @click.prevent="removeAttachment(val)"
+        >
           <IconTrashX
             :width="18"
             :heigh="19"
@@ -44,14 +47,15 @@
     <div
       v-if="field.description && !modelValue.length"
       dir="auto"
-      class="mb-3 px-1"
+      class="mb-3 px-1 field-description-text"
     >
       <MarkdownContent :string="field.description" />
     </div>
     <FileDropzone
-      :message="`${t('upload')} ${field.name || t('files')}${field.required ? '' : ` (${t('optional')})`}`"
+      :message="`${t('upload')} ${(field.title || field.name) || t('files')}${field.required ? '' : ` (${t('optional')})`}`"
       :submitter-slug="submitterSlug"
       :multiple="true"
+      :dry-run="dryRun"
       @upload="onUpload"
     />
   </div>
@@ -79,6 +83,11 @@ export default {
     submitterSlug: {
       type: String,
       required: true
+    },
+    dryRun: {
+      type: Boolean,
+      required: false,
+      default: false
     },
     attachmentsIndex: {
       type: Object,

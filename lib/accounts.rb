@@ -11,7 +11,7 @@ module Accounts
     new_user.uuid = SecureRandom.uuid
     new_user.account = new_account
     new_user.encrypted_password = SecureRandom.hex
-    new_user.email = "#{SecureRandom.hex}@docuseal.co"
+    new_user.email = "#{SecureRandom.hex}@docuseal.com"
 
     account.templates.each do |template|
       new_template = template.dup
@@ -73,29 +73,11 @@ module Accounts
 
     new_template.save!
 
+    SearchEntries.enqueue_reindex(new_template)
+
     Templates::CloneAttachments.call(template: new_template, original_template: template)
 
     new_template
-  end
-
-  def load_webhook_url(account)
-    configs = account.encrypted_configs.find_by(key: EncryptedConfig::WEBHOOK_URL_KEY)
-
-    if !configs && !Docuseal.multitenant? && !account.testing?
-      configs = Account.order(:id).first.encrypted_configs.find_by(key: EncryptedConfig::WEBHOOK_URL_KEY)
-    end
-
-    configs&.value.presence
-  end
-
-  def load_webhook_preferences(account)
-    configs = account.account_configs.find_by(key: AccountConfig::WEBHOOK_PREFERENCES_KEY)
-
-    unless Docuseal.multitenant?
-      configs ||= Account.order(:id).first.account_configs.find_by(key: AccountConfig::WEBHOOK_PREFERENCES_KEY)
-    end
-
-    configs&.value.presence || {}
   end
 
   def load_signing_pkcs(account)
@@ -107,12 +89,18 @@ module Accounts
 
         data
       else
+        return Docuseal.default_pkcs if Docuseal::CERTS.present?
+
         EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value ||
           EncryptedConfig.find_by(key: EncryptedConfig::ESIGN_CERTS_KEY).value
       end
 
     if (default_cert = cert_data['custom']&.find { |e| e['status'] == 'default' })
-      OpenSSL::PKCS12.new(Base64.urlsafe_decode64(default_cert['data']), default_cert['password'].to_s)
+      if default_cert['name'] == Docuseal::AATL_CERT_NAME
+        Docuseal.default_pkcs
+      else
+        OpenSSL::PKCS12.new(Base64.urlsafe_decode64(default_cert['data']), default_cert['password'].to_s)
+      end
     else
       GenerateCertificate.load_pkcs(cert_data)
     end
@@ -133,11 +121,42 @@ module Accounts
     end.presence
   end
 
+  def load_trusted_certs(account)
+    cert_data =
+      if Docuseal.multitenant?
+        value = EncryptedConfig.find_by(account:, key: EncryptedConfig::ESIGN_CERTS_KEY)&.value || {}
+
+        Docuseal::CERTS.merge(value)
+      elsif Docuseal::CERTS.present?
+        Docuseal::CERTS
+      else
+        EncryptedConfig.find_by(key: EncryptedConfig::ESIGN_CERTS_KEY)&.value || {}
+      end
+
+    default_pkcs = GenerateCertificate.load_pkcs(cert_data)
+
+    custom_certs = cert_data.fetch('custom', []).filter_map do |e|
+      next if e['data'].blank?
+
+      OpenSSL::PKCS12.new(Base64.urlsafe_decode64(e['data']), e['password'].to_s)
+    end
+
+    [default_pkcs.certificate,
+     *default_pkcs.ca_certs,
+     *custom_certs.map(&:certificate),
+     *custom_certs.flat_map(&:ca_certs).compact,
+     *Docuseal.trusted_certs]
+  end
+
   def can_send_emails?(_account, **_params)
     return true if Docuseal.multitenant?
     return true if ENV['SMTP_ADDRESS'].present?
 
     EncryptedConfig.exists?(key: EncryptedConfig::EMAIL_SMTP_KEY)
+  end
+
+  def can_send_invitation_emails?(_account)
+    true
   end
 
   def normalize_timezone(timezone)

@@ -8,12 +8,12 @@
     />
     <div class="modal-box pt-4 pb-6 px-6 mt-20 max-h-none w-full max-w-xl">
       <div class="flex justify-between items-center border-b pb-2 mb-2 font-medium">
-        <span>
+        <span class="modal-title">
           {{ t('formula') }} - {{ field.name || buildDefaultName(field, template.fields) }}
         </span>
         <a
           href="#"
-          class="text-xl"
+          class="text-xl modal-close-button"
           @click.prevent="$emit('close')"
         >&times;</a>
       </div>
@@ -23,10 +23,10 @@
           class="bg-base-300 rounded-xl py-2 px-3 text-center"
         >
           <a
-            href="https://www.docuseal.co/pricing"
+            href="https://www.docuseal.com/pricing"
             target="_blank"
             class="link"
-          >Available in Pro</a>
+          >{{ t('available_in_pro') }}</a>
         </div>
         <div class="flex-inline mb-2 gap-2 space-y-1">
           <button
@@ -111,7 +111,7 @@
           </div>
         </div>
         <button
-          class="base-button w-full"
+          class="base-button w-full modal-save-button"
           @click.prevent="validateSaveAndClose"
         >
           {{ t('save') }}
@@ -154,7 +154,7 @@ export default {
   computed: {
     fields () {
       return this.template.fields.reduce((acc, f) => {
-        if (f !== this.field && f.submitter_uuid === this.field.submitter_uuid && ['number'].includes(f.type) && !f.preferences?.formula) {
+        if (f !== this.field && ['number'].includes(f.type) && (!f.preferences?.formula || f.submitter_uuid !== this.field.submitter_uuid)) {
           acc.push(f)
         }
 
@@ -195,16 +195,19 @@ export default {
     },
     validateSaveAndClose () {
       if (!this.withFormula) {
-        return alert('Available only in Pro')
+        return alert(this.t('available_only_in_pro'))
       }
 
       const normalizedFormula = this.normalizeFormula(this.formula)
 
       if (normalizedFormula.includes('FIELD NOT FOUND')) {
-        alert('Some fields are missing in the formula.')
+        alert(this.t('some_fields_are_missing_in_the_formula'))
       } else {
         this.field.preferences.formula = normalizedFormula
-        this.field.readonly = !!normalizedFormula
+
+        if (this.field.type !== 'payment') {
+          this.field.readonly = !!normalizedFormula
+        }
 
         this.save()
 

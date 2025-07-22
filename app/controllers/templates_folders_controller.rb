@@ -6,12 +6,14 @@ class TemplatesFoldersController < ApplicationController
   def edit; end
 
   def update
-    @template.folder = TemplateFolders.find_or_create_by_name(current_user, params[:name])
+    name = [params[:parent_name], params[:name]].compact_blank.join(' / ')
+
+    @template.folder = TemplateFolders.find_or_create_by_name(current_user, name)
 
     if @template.save
-      redirect_back(fallback_location: template_path(@template), notice: 'Document template has been moved')
+      redirect_back(fallback_location: template_path(@template), notice: I18n.t('document_template_has_been_moved'))
     else
-      redirect_back(fallback_location: template_path(@template), notice: 'Unable to move template into folder')
+      redirect_back(fallback_location: template_path(@template), notice: I18n.t('unable_to_move_template_into_folder'))
     end
   end
 

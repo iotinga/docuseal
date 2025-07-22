@@ -1,42 +1,33 @@
 # frozen_string_literal: true
 
-class SendSubmissionCreatedWebhookRequestJob < ApplicationJob
-  queue_as :webhooks
+class SendSubmissionCreatedWebhookRequestJob
+  include Sidekiq::Job
 
-  USER_AGENT = 'DocuSeal.co Webhook'
+  sidekiq_options queue: :webhooks
 
   MAX_ATTEMPTS = 10
 
-  def perform(submission, params = {})
-    attempt = params[:attempt].to_i
-    url = Accounts.load_webhook_url(submission.account)
+  def perform(params = {})
+    submission = Submission.find(params['submission_id'])
+    webhook_url = WebhookUrl.find(params['webhook_url_id'])
 
-    return if url.blank?
+    attempt = params['attempt'].to_i
 
-    preferences = Accounts.load_webhook_preferences(submission.account)
+    return if webhook_url.url.blank? || webhook_url.events.exclude?('submission.created')
 
-    return if preferences['submission.created'].blank?
-
-    resp = begin
-      Faraday.post(url,
-                   {
-                     event_type: 'submission.created',
-                     timestamp: Time.current,
-                     data: Submissions::SerializeForApi.call(submission)
-                   }.to_json,
-                   'Content-Type' => 'application/json',
-                   'User-Agent' => USER_AGENT)
-    rescue Faraday::Error
-      nil
-    end
+    resp = SendWebhookRequest.call(webhook_url, event_type: 'submission.created',
+                                                event_uuid: params['event_uuid'],
+                                                record: submission,
+                                                attempt:,
+                                                data: Submissions::SerializeForApi.call(submission))
 
     if (resp.nil? || resp.status.to_i >= 400) && attempt <= MAX_ATTEMPTS &&
        (!Docuseal.multitenant? || submission.account.account_configs.exists?(key: :plan))
-      SendSubmissionCreatedWebhookRequestJob.set(wait: (2**attempt).minutes)
-                                            .perform_later(submission, {
-                                                             attempt: attempt + 1,
-                                                             last_status: resp&.status.to_i
-                                                           })
+      SendSubmissionCreatedWebhookRequestJob.perform_in((2**attempt).minutes, {
+                                                          **params,
+                                                          'attempt' => attempt + 1,
+                                                          'last_status' => resp&.status.to_i
+                                                        })
     end
   end
 end

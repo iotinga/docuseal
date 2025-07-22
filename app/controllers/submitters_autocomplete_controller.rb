@@ -9,7 +9,8 @@ class SubmittersAutocompleteController < ApplicationController
   def index
     submitters = search_submitters(@submitters)
 
-    values = submitters.limit(LIMIT).group(SELECT_COLUMNS.join(', ')).pluck(SELECT_COLUMNS.join(', '))
+    arel_columns = SELECT_COLUMNS.map { |col| Submitter.arel_table[col] }
+    values = submitters.limit(LIMIT).group(arel_columns).pluck(arel_columns)
 
     attrs = values.map { |row| SELECT_COLUMNS.zip(row).to_h }
     attrs = attrs.uniq { |e| e[params[:field]] } if params[:field].present?
@@ -21,13 +22,17 @@ class SubmittersAutocompleteController < ApplicationController
 
   def search_submitters(submitters)
     if SELECT_COLUMNS.include?(params[:field])
-      column = Submitter.arel_table[params[:field].to_sym]
+      if Docuseal.fulltext_search?
+        Submitters.fulltext_search_field(current_user, submitters, params[:q], params[:field])
+      else
+        column = Submitter.arel_table[params[:field].to_sym]
 
-      term = "#{params[:q].downcase}%"
+        term = "#{params[:q].downcase}%"
 
-      submitters.where(column.matches(term))
+        submitters.where(column.matches(term))
+      end
     else
-      Submitters.search(submitters, params[:q])
+      Submitters.search(current_user, submitters, params[:q])
     end
   end
 end

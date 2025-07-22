@@ -3,7 +3,7 @@
     class="list-field group mb-2"
   >
     <div
-      class="border border-base-300 rounded rounded-tr-none relative group"
+      class="border border-base-300 rounded relative group fields-list-item"
       :style="{ backgroundColor: backgroundColor }"
     >
       <div class="flex items-center justify-between relative group/contenteditable-container">
@@ -14,7 +14,7 @@
         <div class="flex items-center p-1 space-x-1">
           <FieldType
             v-model="field.type"
-            :editable="editable && !defaultField"
+            :editable="editable && !defaultField && field.type != 'heading'"
             :button-width="20"
             :menu-classes="'mt-1.5'"
             :menu-style="{ backgroundColor: dropdownBgColor }"
@@ -23,8 +23,8 @@
           />
           <Contenteditable
             ref="name"
-            :model-value="(defaultField ? (field.title || field.name) : field.name) || defaultName"
-            :editable="editable && !defaultField"
+            :model-value="(defaultField ? (defaultField.title || field.title || field.name) : field.name) || defaultName"
+            :editable="editable && !defaultField && field.type != 'heading'"
             :icon-inline="true"
             :icon-width="18"
             :icon-stroke-width="1.6"
@@ -93,10 +93,12 @@
             v-if="field.type === 'payment'"
             :field="field"
             @click-condition="isShowConditionsModal = true"
+            @click-description="isShowDescriptionModal = true"
+            @click-formula="isShowFormulaModal = true"
           />
           <span
-            v-else
-            class="dropdown dropdown-end"
+            v-else-if="field.type !== 'heading'"
+            class="dropdown dropdown-end field-settings-dropdown"
             @mouseenter="renderDropdown = true"
             @touchstart="renderDropdown = true"
           >
@@ -123,17 +125,20 @@
                 :field="field"
                 :default-field="defaultField"
                 :editable="editable"
+                :with-signature-id="withSignatureId"
                 :background-color="dropdownBgColor"
                 @click-formula="isShowFormulaModal = true"
+                @click-font="isShowFontModal = true"
                 @click-description="isShowDescriptionModal = true"
                 @click-condition="isShowConditionsModal = true"
                 @set-draw="$emit('set-draw', $event)"
+                @remove-area="removeArea"
                 @scroll-to="$emit('scroll-to', $event)"
               />
             </ul>
           </span>
           <button
-            class="relative text-transparent group-hover:text-base-content pr-1"
+            class="relative text-transparent group-hover:text-base-content pr-1 field-remove-button"
             :title="t('remove')"
             @click="$emit('remove', field)"
           >
@@ -145,7 +150,7 @@
         </div>
       </div>
       <div
-        v-if="field.options"
+        v-if="field.options && withOptions"
         ref="options"
         class="border-t border-base-300 mx-2 pt-2 space-y-1.5"
         draggable="true"
@@ -189,14 +194,14 @@
             class="w-full input input-primary input-xs text-sm bg-transparent"
             :placeholder="`${t('option')} ${index + 1}`"
             type="text"
-            :readonly="!editable"
+            :readonly="!editable || defaultField"
             required
             dir="auto"
             @focus="maybeFocusOnOptionArea(option)"
             @blur="save"
           >
           <button
-            v-if="editable"
+            v-if="editable && !defaultField"
             class="text-sm w-3.5"
             tabindex="-1"
             @click="removeOption(option)"
@@ -205,11 +210,11 @@
           </button>
         </div>
         <div
-          v-if="field.options && !editable"
+          v-if="field.options && (!editable || defaultField)"
           class="pb-1"
         />
         <button
-          v-else-if="field.options && editable"
+          v-else-if="field.options && editable && !defaultField"
           class="text-center text-sm w-full pb-1"
           @click="addOption"
         >
@@ -229,11 +234,22 @@
       />
     </Teleport>
     <Teleport
+      v-if="isShowFontModal"
+      :to="modalContainerEl"
+    >
+      <FontModal
+        :field="field"
+        :editable="editable && !defaultField"
+        :build-default-name="buildDefaultName"
+        @close="isShowFontModal = false"
+      />
+    </Teleport>
+    <Teleport
       v-if="isShowConditionsModal"
       :to="modalContainerEl"
     >
       <ConditionsModal
-        :field="field"
+        :item="field"
         :build-default-name="buildDefaultName"
         @close="isShowConditionsModal = false"
       />
@@ -258,6 +274,7 @@ import FieldType from './field_type'
 import PaymentSettings from './payment_settings'
 import FieldSettings from './field_settings'
 import FormulaModal from './formula_modal'
+import FontModal from './font_modal'
 import ConditionsModal from './conditions_modal'
 import DescriptionModal from './description_modal'
 import { IconRouteAltLeft, IconMathFunction, IconNewSection, IconTrashX, IconSettings } from '@tabler/icons-vue'
@@ -272,6 +289,7 @@ export default {
     PaymentSettings,
     IconNewSection,
     FormulaModal,
+    FontModal,
     DescriptionModal,
     ConditionsModal,
     IconRouteAltLeft,
@@ -279,11 +297,21 @@ export default {
     IconMathFunction,
     FieldType
   },
-  inject: ['template', 'save', 'backgroundColor', 'selectedAreaRef', 't'],
+  inject: ['template', 'save', 'backgroundColor', 'selectedAreaRef', 't', 'locale'],
   props: {
     field: {
       type: Object,
       required: true
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
+    },
+    withOptions: {
+      type: Boolean,
+      required: false,
+      default: true
     },
     defaultField: {
       type: Object,
@@ -302,6 +330,7 @@ export default {
       isNameFocus: false,
       showPaymentModal: false,
       isShowFormulaModal: false,
+      isShowFontModal: false,
       isShowConditionsModal: false,
       isShowDescriptionModal: false,
       renderDropdown: false
@@ -309,6 +338,7 @@ export default {
   },
   computed: {
     fieldNames: FieldType.computed.fieldNames,
+    fieldLabels: FieldType.computed.fieldLabels,
     dropdownBgColor () {
       return ['', null, 'transparent'].includes(this.backgroundColor) ? 'white' : this.backgroundColor
     },
@@ -339,12 +369,17 @@ export default {
 
     if (this.field.type === 'date') {
       this.field.preferences.format ||=
-        (Intl.DateTimeFormat().resolvedOptions().locale.endsWith('-US') ? 'MM/DD/YYYY' : 'DD/MM/YYYY')
+       ({ 'de-DE': 'DD.MM.YYYY' }[this.locale] || ((Intl.DateTimeFormat().resolvedOptions().locale.endsWith('-US') || new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).format(new Date()).match(/\s(?:CST|CDT|PST|PDT|EST|EDT)$/)) ? 'MM/DD/YYYY' : 'DD/MM/YYYY'))
     }
   },
   methods: {
+    removeArea (area) {
+      this.field.areas.splice(this.field.areas.indexOf(area), 1)
+
+      this.save()
+    },
     buildDefaultName (field, fields) {
-      if (field.type === 'payment' && field.preferences?.price) {
+      if (field.type === 'payment' && field.preferences?.price && !field.preferences?.formula) {
         const { price, currency } = field.preferences || {}
 
         const formattedPrice = new Intl.NumberFormat([], {
@@ -356,9 +391,11 @@ export default {
       } else {
         const typeIndex = fields.filter((f) => f.type === field.type).indexOf(field)
 
-        const suffix = { multiple: this.t('select'), radio: this.t('group') }[field.type] || this.t('field')
-
-        return `${this.fieldNames[field.type]} ${suffix} ${typeIndex + 1}`
+        if (field.type === 'heading') {
+          return `${this.fieldNames[field.type]} ${typeIndex + 1}`
+        } else {
+          return `${this.fieldLabels[field.type]} ${typeIndex + 1}`
+        }
       }
     },
     onNameFocus (e) {
@@ -381,7 +418,7 @@ export default {
       return this.sortedAreas[0] && this.$emit('scroll-to', this.sortedAreas[0])
     },
     closeDropdown () {
-      document.activeElement.blur()
+      this.$el.getRootNode().activeElement.blur()
     },
     addOption () {
       this.field.options.push({ value: '', uuid: v4() })
@@ -414,6 +451,10 @@ export default {
 
       if (['radio', 'multiple', 'select'].includes(this.field.type)) {
         this.field.options ||= [{ value: '', uuid: v4() }]
+      }
+
+      if (['heading'].includes(this.field.type)) {
+        this.field.readonly = true
       }
 
       (this.field.areas || []).forEach((area) => {

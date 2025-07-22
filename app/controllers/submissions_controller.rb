@@ -6,8 +6,21 @@ class SubmissionsController < ApplicationController
 
   load_and_authorize_resource :submission, only: %i[show destroy]
 
+  prepend_before_action :maybe_redirect_com, only: %i[show]
+
+  before_action only: :create do
+    authorize!(:create, Submission)
+  end
+
   def show
     @submission = Submissions.preload_with_pages(@submission)
+
+    unless @submission.submitters.all?(&:completed_at?)
+      ActiveRecord::Associations::Preloader.new(
+        records: [@submission],
+        associations: [submitters: :start_form_submission_events]
+      ).call
+    end
 
     render :show, layout: 'plain'
   end
@@ -17,8 +30,6 @@ class SubmissionsController < ApplicationController
   end
 
   def create
-    authorize!(:create, Submission)
-
     save_template_message(@template, params) if params[:save_message] == '1'
 
     if params[:is_custom_message] != '1'
@@ -39,26 +50,39 @@ class SubmissionsController < ApplicationController
                                            user: current_user,
                                            source: :invite,
                                            submitters_order: params[:preserve_order] == '1' ? 'preserved' : 'random',
-                                           mark_as_sent: params[:send_email] == '1',
                                            submissions_attrs: submissions_params[:submission].to_h.values,
                                            params: params.merge('send_completed_email' => true))
       end
 
-    submissions.each do |submission|
-      SendSubmissionCreatedWebhookRequestJob.perform_later(submission)
-    end
+    WebhookUrls.enqueue_events(submissions, 'submission.created')
 
     Submissions.send_signature_requests(submissions)
 
-    redirect_to template_path(@template), notice: 'New recipients have been added'
+    SearchEntries.enqueue_reindex(submissions)
+
+    redirect_to template_path(@template), notice: I18n.t('new_recipients_have_been_added')
+  rescue Submissions::CreateFromSubmitters::BaseError => e
+    render turbo_stream: turbo_stream.replace(:submitters_error,
+                                              partial: 'submissions/error',
+                                              locals: { error: e.message }),
+           status: :unprocessable_entity
   end
 
   def destroy
-    @submission.update!(archived_at: Time.current)
+    notice =
+      if params[:permanently].in?(['true', true])
+        @submission.destroy!
 
-    SendSubmissionArchivedWebhookRequestJob.perform_later(@submission)
+        I18n.t('submission_has_been_removed')
+      else
+        @submission.update!(archived_at: Time.current)
 
-    redirect_back(fallback_location: template_path(@submission.template), notice: 'Submission has been archived')
+        WebhookUrls.enqueue_events(@submission, 'submission.archived')
+
+        I18n.t('submission_has_been_archived')
+      end
+
+    redirect_back(fallback_location: @submission.template_id ? template_path(@submission.template) : root_path, notice:)
   end
 
   private

@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'rails_helper'
-
 RSpec.describe 'App Setup' do
   let(:form_data) do
     {
@@ -32,7 +30,7 @@ RSpec.describe 'App Setup' do
 
       expect do
         click_button 'Submit'
-        sleep 2
+        page.driver.wait_for_network_idle
       end.to change(Account, :count).by(1).and change(User, :count).by(1).and change(EncryptedConfig, :count).by(2)
 
       user = User.last
@@ -53,6 +51,16 @@ RSpec.describe 'App Setup' do
   end
 
   context 'when invalid information' do
+    it 'does not setup the app if the email is invalid' do
+      fill_setup_form(form_data.merge(email: 'bob@example-com'))
+
+      expect do
+        click_button 'Submit'
+      end.not_to(change(User, :count))
+
+      expect(page).to have_content('Email is invalid')
+    end
+
     it 'does not setup the app if the password is too short' do
       fill_setup_form(form_data.merge(password: 'pass'))
 

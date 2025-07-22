@@ -1,7 +1,7 @@
 <template>
   <span
-    class="dropdown dropdown-end"
-    :class="{ 'dropdown-open': (!field.preferences?.price || !isConnected) && !isLoading }"
+    class="dropdown dropdown-end field-settings-dropdown"
+    :class="{ 'dropdown-open': ((!field.preferences?.price && !field.preferences?.formula) || !isConnected) && !isLoading }"
   >
     <label
       tabindex="0"
@@ -21,12 +21,13 @@
       @click="closeDropdown"
     >
       <div
+        v-if="!('price_id' in field.preferences)"
         class="py-1.5 px-1 relative"
         @click.stop
       >
         <select
           v-model="field.preferences.currency"
-          placeholder="Price"
+          :placeholder="t('price')"
           class="select select-bordered select-xs font-normal w-full max-w-xs !h-7 !outline-0"
           @change="save"
         >
@@ -43,7 +44,7 @@
           class="absolute -top-1 left-2.5 px-1 h-4"
           style="font-size: 8px"
         >
-          Currency
+          {{ t('currency') }}
         </label>
       </div>
       <div
@@ -51,20 +52,53 @@
         @click.stop
       >
         <input
+          v-if="field.preferences.formula"
+          type="number"
+          :placeholder="t('price')"
+          disabled="true"
+          class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0"
+          @blur="save"
+        >
+        <input
+          v-else-if="'price_id' in field.preferences"
+          v-model="field.preferences.price_id"
+          placeholder="Price ID: price_XXXXX"
+          class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0"
+          @blur="save"
+        >
+        <input
+          v-else
           v-model="field.preferences.price"
           type="number"
-          placeholder="Price"
+          :placeholder="t('price')"
           class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0"
           @blur="save"
         >
         <label
-          v-if="field.preferences.price"
+          v-if="field.preferences.price && !field.preferences.formula"
           :style="{ backgroundColor: backgroundColor }"
           class="absolute -top-1 left-2.5 px-1 h-4"
           style="font-size: 8px"
         >
-          Price
+          {{ t('price') }}
         </label>
+        <div class="flex items-center justify-center">
+          <a
+            href="#"
+            class="hover:underline"
+            style="font-size: 11px"
+            :class="{'underline': !('price_id' in field.preferences)}"
+            @click="delete field.preferences.price_id"
+          >{{ t('one_off') }}</a>
+          <span class="h-2.5 border-l border-base-content mx-1" />
+          <a
+            href="#"
+            class="hover:underline"
+            style="font-size: 11px"
+            :class="{'underline': ('price_id' in field.preferences)}"
+            @click="field.preferences.price_id ??= ''"
+          >{{ t('recurrent') }}</a>
+        </div>
       </div>
       <div
         v-if="!isConnected || isOauthSuccess"
@@ -144,12 +178,41 @@
         <a
           v-if="!isConnected"
           class="block link text-center mt-1"
-          href="https://www.docuseal.co/blog/accept-payments-and-request-signatures-with-ease"
+          href="https://www.docuseal.com/blog/accept-payments-and-request-signatures-with-ease"
           target="_blank"
           data-turbo="false"
-        >Learn more</a>
+        >{{ t('learn_more') }}</a>
       </div>
+      <li
+        v-if="!('price_id' in field.preferences)"
+        class="mb-1"
+      >
+        <label
+          class="label-text cursor-pointer text-center w-full flex items-center"
+          @click="$emit('click-formula')"
+        >
+          <IconMathFunction
+            width="18"
+          />
+          <span class="text-sm">
+            {{ t('formula') }}
+          </span>
+        </label>
+      </li>
       <hr>
+      <li>
+        <label
+          class="label-text cursor-pointer text-center w-full flex items-center"
+          @click="$emit('click-description')"
+        >
+          <IconInfoCircle
+            width="18"
+          />
+          <span class="text-sm">
+            {{ t('description') }}
+          </span>
+        </label>
+      </li>
       <li class="mt-1">
         <label
           class="label-text cursor-pointer text-center w-full flex items-center"
@@ -168,7 +231,7 @@
 </template>
 
 <script>
-import { IconSettings, IconCircleCheck, IconBrandStripe, IconInnerShadowTop, IconRouteAltLeft } from '@tabler/icons-vue'
+import { IconMathFunction, IconSettings, IconCircleCheck, IconInfoCircle, IconBrandStripe, IconInnerShadowTop, IconRouteAltLeft } from '@tabler/icons-vue'
 import { ref } from 'vue'
 
 const isConnected = ref(false)
@@ -179,6 +242,8 @@ export default {
     IconSettings,
     IconCircleCheck,
     IconRouteAltLeft,
+    IconInfoCircle,
+    IconMathFunction,
     IconInnerShadowTop,
     IconBrandStripe
   },
@@ -189,7 +254,7 @@ export default {
       required: true
     }
   },
-  emits: ['click-condition'],
+  emits: ['click-condition', 'click-description', 'click-formula'],
   data () {
     return {
       isLoading: false
@@ -204,7 +269,7 @@ export default {
       return document.location.origin + '/auth/stripe_connect/callback'
     },
     defaultCurrencies () {
-      return ['USD', 'EUR', 'GBP']
+      return ['USD', 'EUR', 'GBP', 'CAD', 'AUD']
     },
     currenciesList () {
       return this.currencies.length ? this.currencies : this.defaultCurrencies
@@ -226,6 +291,10 @@ export default {
         return 'EUR'
       } else if (userTimezone.includes('London') || userTimezone.includes('Belfast')) {
         return 'GBP'
+      } else if (userTimezone.includes('Vancouver') || userTimezone.includes('Toronto') || userTimezone.includes('Halifax') || userTimezone.includes('Edmonton')) {
+        return 'CAD'
+      } else if (userTimezone.startsWith('Australia')) {
+        return 'AUD'
       } else {
         return 'USD'
       }

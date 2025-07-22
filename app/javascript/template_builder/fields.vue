@@ -1,11 +1,11 @@
 <template>
-  <div :class="withStickySubmitters ? 'sticky top-0 z-10' : ''">
+  <div :class="withStickySubmitters ? 'sticky top-0 z-[1]' : ''">
     <FieldSubmitter
       :model-value="selectedSubmitter.uuid"
-      class="roles-dropdown w-full rounded-lg"
+      class="roles-dropdown w-full rounded-lg roles-dropdown"
       :style="withStickySubmitters ? { backgroundColor } : {}"
       :submitters="submitters"
-      :menu-style="{ backgroundColor: ['', null, 'transparent'].includes(backgroundColor) ? 'white' : backgroundColor }"
+      :menu-style="{ overflow: 'auto', display: 'flex', flexDirection: 'row', maxHeight: 'calc(100vh - 120px)', backgroundColor: ['', null, 'transparent'].includes(backgroundColor) ? 'white' : backgroundColor }"
       :editable="editable && !defaultSubmitters.length"
       @new-submitter="save"
       @remove="removeSubmitter"
@@ -25,11 +25,12 @@
       :data-uuid="field.uuid"
       :field="field"
       :type-index="fields.filter((f) => f.type === field.type).indexOf(field)"
-      :editable="editable && (!fieldsDragFieldRef.value || fieldsDragFieldRef.value !== field)"
-      :default-field="defaultFields.find((f) => f.name === field.name)"
+      :editable="editable"
+      :with-signature-id="withSignatureId"
+      :default-field="defaultFieldsIndex[field.name]"
       :draggable="editable"
-      @dragstart="fieldsDragFieldRef.value = field"
-      @dragend="fieldsDragFieldRef.value = null"
+      @dragstart="[fieldsDragFieldRef.value = field, removeDragOverlay($event), setDragPlaceholder($event)]"
+      @dragend="[fieldsDragFieldRef.value = null, $emit('set-drag-placeholder', null)]"
       @remove="removeField"
       @scroll-to="$emit('scroll-to-area', $event)"
       @set-draw="$emit('set-draw', $event)"
@@ -74,8 +75,8 @@
         <div
           :style="{ backgroundColor }"
           draggable="true"
-          class="default-field border border-base-300 rounded rounded-tr-none relative group mb-2"
-          @dragstart="onDragstart({ type: 'text', ...field })"
+          class="border border-base-300 rounded relative group mb-2 default-field fields-list-item"
+          @dragstart="onDragstart($event, field)"
           @dragend="$emit('drag-end')"
         >
           <div class="flex items-center justify-between relative cursor-grab">
@@ -104,21 +105,23 @@
   </div>
   <div
     v-if="editable && !onlyDefinedFields"
-    class="grid grid-cols-3 gap-1 pb-2"
+    id="field-types-grid"
+    class="grid grid-cols-3 gap-1 pb-2 fields-grid"
   >
     <template
       v-for="(icon, type) in fieldIconsSorted"
       :key="type"
     >
       <button
-        v-if="(fieldTypes.length === 0 || fieldTypes.includes(type)) && (withPhone || type != 'phone') && (withPayment || type != 'payment')"
+        v-if="fieldTypes.includes(type) || ((withPhone || type != 'phone') && (withPayment || type != 'payment') && (withVerification || type != 'verification'))"
+        :id="`${type}_type_field_button`"
         draggable="true"
-        class="field-type-button group flex items-center justify-center border border-dashed w-full rounded relative"
+        class="field-type-button group flex items-center justify-center border border-dashed w-full rounded relative fields-grid-item"
         :style="{ backgroundColor }"
         :class="drawFieldType === type ? 'border-base-content/40' : 'border-base-300 hover:border-base-content/20'"
-        @dragstart="onDragstart({ type: type })"
+        @dragstart="onDragstart($event, { type: type })"
         @dragend="$emit('drag-end')"
-        @click="['file', 'payment'].includes(type) ? $emit('add-field', type) : $emit('set-draw-type', type)"
+        @click="['file', 'payment', 'verification'].includes(type) ? $emit('add-field', type) : $emit('set-draw-type', type)"
       >
         <div
           class="flex items-console transition-all cursor-grab h-full absolute left-0"
@@ -137,12 +140,38 @@
         v-else-if="type == 'phone' && (fieldTypes.length === 0 || fieldTypes.includes(type))"
         class="tooltip tooltip-bottom flex"
         :class="{'tooltip-bottom-end': withPayment, 'tooltip-bottom': !withPayment }"
-        data-tip="Unlock SMS-verified phone number field with paid plan. Use text field for phone numbers without verification."
+        :data-tip="t('unlock_sms_verified_phone_number_field_with_paid_plan_use_text_field_for_phone_numbers_without_verification')"
       >
         <a
-          href="https://www.docuseal.co/pricing"
+          href="https://www.docuseal.com/pricing"
           target="_blank"
-          class="opacity-50 flex items-center justify-center border border-dashed border-base-300 w-full rounded relative"
+          class="opacity-50 flex items-center justify-center border border-dashed border-base-300 w-full rounded relative fields-grid-item"
+          :style="{ backgroundColor }"
+        >
+          <div class="w-0 absolute left-0">
+            <IconLock
+              width="18"
+              height="18"
+              stroke-width="1.5"
+            />
+          </div>
+          <div class="flex items-center flex-col px-2 py-2">
+            <component :is="icon" />
+            <span class="text-xs mt-1">
+              {{ fieldNames[type] }}
+            </span>
+          </div>
+        </a>
+      </div>
+      <div
+        v-else-if="withVerification === false && type == 'verification' && (fieldTypes.length === 0 || fieldTypes.includes(type))"
+        class="tooltip tooltip-bottom flex tooltip-bottom-start"
+        :data-tip="t('obtain_qualified_electronic_signature_with_the_trusted_provider_click_to_learn_more')"
+      >
+        <a
+          href="https://www.docuseal.com/qualified-electronic-signature"
+          target="_blank"
+          class="opacity-50 flex items-center justify-center border border-dashed border-base-300 w-full rounded relative fields-grid-item"
           :style="{ backgroundColor }"
         >
           <div class="w-0 absolute left-0">
@@ -163,20 +192,37 @@
     </template>
   </div>
   <div
-    v-if="fields.length < 4 && editable && withHelp"
+    v-if="fields.length < 4 && editable && withHelp && !showTourStartForm"
     class="text-xs p-2 border border-base-200 rounded"
   >
     <ul class="list-disc list-outside ml-3">
       <li>
-        Draw a text field on the page with a mouse
+        {{ t('draw_a_text_field_on_the_page_with_a_mouse') }}
       </li>
       <li>
-        Drag &amp; drop any other field type on the page
+        {{ t('drag_and_drop_any_other_field_type_on_the_page') }}
       </li>
       <li>
-        Click on the field type above to start drawing it
+        {{ t('click_on_the_field_type_above_to_start_drawing_it') }}
       </li>
     </ul>
+  </div>
+  <div
+    v-show="fields.length < 4 && editable && withHelp && showTourStartForm"
+    class="rounded py-2 px-4 w-full border border-dashed border-base-300"
+  >
+    <div class="text-center text-sm">
+      {{ t('start_a_quick_tour_to_learn_how_to_create_an_send_your_first_document') }}
+    </div>
+    <div class="flex justify-center">
+      <label
+        for="start_tour_button"
+        class="btn btn-sm btn-warning w-40 mt-2"
+        @click="startTour"
+      >
+        {{ t('start_tour') }}
+      </label>
+    </div>
   </div>
 </template>
 
@@ -197,10 +243,24 @@ export default {
     IconDrag,
     IconLock
   },
-  inject: ['save', 'backgroundColor', 'withPhone', 'withPayment', 't', 'fieldsDragFieldRef'],
+  inject: ['save', 'backgroundColor', 'withPhone', 'withVerification', 'withPayment', 't', 'fieldsDragFieldRef'],
   props: {
     fields: {
       type: Array,
+      required: true
+    },
+    withFieldsSearch: {
+      type: Boolean,
+      required: false,
+      default: null
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
+    },
+    template: {
+      type: Object,
       required: true
     },
     withHelp: {
@@ -255,9 +315,14 @@ export default {
     selectedSubmitter: {
       type: Object,
       required: true
+    },
+    showTourStartForm: {
+      type: Boolean,
+      required: false,
+      default: false
     }
   },
-  emits: ['add-field', 'set-draw', 'set-draw-type', 'set-drag', 'drag-end', 'scroll-to-area', 'change-submitter'],
+  emits: ['add-field', 'set-draw', 'set-draw-type', 'set-drag', 'drag-end', 'scroll-to-area', 'change-submitter', 'set-drag-placeholder'],
   data () {
     return {
       defaultFieldsSearch: ''
@@ -267,7 +332,18 @@ export default {
     fieldNames: FieldType.computed.fieldNames,
     fieldIcons: FieldType.computed.fieldIcons,
     isShowFieldSearch () {
-      return this.submitterDefaultFields.length > 15
+      if (this.withFieldsSearch === false) {
+        return false
+      } else {
+        return this.submitterDefaultFields.length > 15
+      }
+    },
+    defaultFieldsIndex () {
+      return this.defaultFields.reduce((acc, field) => {
+        acc[field.name] = field
+
+        return acc
+      }, {})
     },
     fieldIconsSorted () {
       if (this.fieldTypes.length) {
@@ -277,7 +353,7 @@ export default {
           return acc
         }, {})
       } else {
-        return this.fieldIcons
+        return Object.fromEntries(Object.entries(this.fieldIcons).filter(([key]) => key !== 'heading' && key !== 'datenow'))
       }
     },
     submitterFields () {
@@ -290,29 +366,63 @@ export default {
     },
     filteredSubmitterDefaultFields () {
       if (this.defaultFieldsSearch) {
-        return this.submitterDefaultFields.filter((f) => f.name.toLowerCase().includes(this.defaultFieldsSearch.toLowerCase()))
+        return this.submitterDefaultFields.filter((f) => (f.title || f.name).toLowerCase().includes(this.defaultFieldsSearch.toLowerCase()))
       } else {
         return this.submitterDefaultFields
       }
     }
   },
   methods: {
-    onDragstart (field) {
+    onDragstart (event, field) {
+      this.removeDragOverlay(event)
+
+      this.setDragPlaceholder(event)
+
       this.$emit('set-drag', field)
     },
+    setDragPlaceholder (event) {
+      this.$emit('set-drag-placeholder', {
+        offsetX: event.offsetX,
+        offsetY: event.offsetY,
+        x: event.clientX - event.offsetX,
+        y: event.clientY - event.offsetY,
+        w: event.currentTarget.clientWidth + 2,
+        h: event.currentTarget.clientHeight + 2
+      })
+    },
+    removeDragOverlay (event) {
+      const root = this.$el.getRootNode()
+      const hiddenEl = document.createElement('div')
+
+      hiddenEl.style.width = '1px'
+      hiddenEl.style.height = '1px'
+      hiddenEl.style.opacity = '0'
+      hiddenEl.style.position = 'fixed'
+
+      root.querySelector('#docuseal_modal_container').appendChild(hiddenEl)
+
+      event.dataTransfer.setDragImage(hiddenEl, 0, 0)
+
+      setTimeout(() => { hiddenEl.remove() }, 1000)
+    },
+    startTour () {
+      document.querySelector('app-tour').start()
+    },
     onFieldDragover (e) {
-      const targetField = e.target.closest('[data-uuid]')
-      const dragField = this.$refs.fields.querySelector(`[data-uuid="${this.fieldsDragFieldRef.value.uuid}"]`)
+      if (this.fieldsDragFieldRef.value) {
+        const targetField = e.target.closest('[data-uuid]')
+        const dragField = this.$refs.fields.querySelector(`[data-uuid="${this.fieldsDragFieldRef.value.uuid}"]`)
 
-      if (dragField && targetField && targetField !== dragField) {
-        const fields = Array.from(this.$refs.fields.children)
-        const currentIndex = fields.indexOf(dragField)
-        const targetIndex = fields.indexOf(targetField)
+        if (dragField && targetField && targetField !== dragField) {
+          const fields = Array.from(this.$refs.fields.children)
+          const currentIndex = fields.indexOf(dragField)
+          const targetIndex = fields.indexOf(targetField)
 
-        if (currentIndex < targetIndex) {
-          targetField.after(dragField)
-        } else {
-          targetField.before(dragField)
+          if (currentIndex < targetIndex) {
+            targetField.after(dragField)
+          } else {
+            targetField.before(dragField)
+          }
         }
       }
     },
@@ -350,6 +460,14 @@ export default {
         (f.conditions || []).forEach((c) => {
           if (c.field_uuid === field.uuid) {
             f.conditions.splice(f.conditions.indexOf(c), 1)
+          }
+        })
+      })
+
+      this.template.schema.forEach((item) => {
+        (item.conditions || []).forEach((c) => {
+          if (c.field_uuid === field.uuid) {
+            item.conditions.splice(item.conditions.indexOf(c), 1)
           }
         })
       })

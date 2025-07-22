@@ -5,12 +5,12 @@ class TemplateDocumentsController < ApplicationController
 
   def create
     if params[:blobs].blank? && params[:files].blank?
-      return render json: { error: 'File is missing' }, status: :unprocessable_entity
+      return render json: { error: I18n.t('file_is_missing') }, status: :unprocessable_entity
     end
 
     old_fields_hash = @template.fields.hash
 
-    documents = Templates::CreateAttachments.call(@template, params)
+    documents = Templates::CreateAttachments.call(@template, params, extract_fields: true)
 
     schema = documents.map do |doc|
       { attachment_uuid: doc.uuid, name: doc.filename.base }
@@ -28,6 +28,6 @@ class TemplateDocumentsController < ApplicationController
       )
     }
   rescue Templates::CreateAttachments::PdfEncrypted
-    render json: { error: 'PDF encrypted' }, status: :unprocessable_entity
+    render json: { error: 'PDF encrypted', status: 'pdf_encrypted' }, status: :unprocessable_entity
   end
 end

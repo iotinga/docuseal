@@ -17,26 +17,53 @@ module Submissions
 
       pdf.trailer.info[:Creator] = "#{Docuseal.product_name} (#{Docuseal::PRODUCT_URL})"
 
-      sign_params = {
-        reason: sign_reason,
-        **Submissions::GenerateResultAttachments.build_signing_params(pkcs, tsa_url)
-      }
+      if Docuseal.pdf_format == 'pdf/a-3b'
+        pdf.task(:pdfa, level: '3b')
+        pdf.config['font.map'] = GenerateResultAttachments::PDFA_FONT_MAP
+      end
 
-      pdf.sign(io, **sign_params)
+      if pkcs
+        sign_params = {
+          reason: Submissions::GenerateResultAttachments.single_sign_reason(submitter),
+          **Submissions::GenerateResultAttachments.build_signing_params(submitter, pkcs, tsa_url)
+        }
+
+        sign_pdf(io, pdf, sign_params)
+
+        Submissions::GenerateResultAttachments.maybe_enable_ltv(io, sign_params)
+      else
+        pdf.write(io, incremental: true, validate: true)
+      end
 
       ActiveStorage::Attachment.create!(
         blob: ActiveStorage::Blob.create_and_upload!(
-          io: StringIO.new(io.string), filename: "#{submission.template.name}.pdf"
+          io: io.tap(&:rewind), filename: "#{submission.name || submission.template.name}.pdf"
         ),
         name: 'combined_document',
         record: submission
       )
     end
 
+    def sign_pdf(io, pdf, sign_params)
+      pdf.sign(io, **sign_params)
+    rescue HexaPDF::MalformedPDFError => e
+      Rollbar.error(e) if defined?(Rollbar)
+
+      pdf.sign(io, write_options: { incremental: false }, **sign_params)
+    rescue HexaPDF::Error => e
+      Rollbar.error(e) if defined?(Rollbar)
+
+      pdf.validate(auto_correct: true)
+
+      pdf.sign(io, write_options: { validate: false }, **sign_params)
+    end
+
     def build_combined_pdf(submitter)
       pdfs_index = Submissions::GenerateResultAttachments.generate_pdfs(submitter)
 
-      audit_trail = Submissions::GenerateAuditTrail.build_audit_trail(submitter.submission)
+      audit_trail = I18n.with_locale(submitter.account.locale) do
+        Submissions::GenerateAuditTrail.build_audit_trail(submitter.submission)
+      end
 
       audit_trail.dispatch_message(:complete_objects)
 
@@ -44,6 +71,8 @@ module Submissions
 
       submitter.submission.template_schema.each do |item|
         pdf = pdfs_index[item['attachment_uuid']]
+
+        next unless pdf
 
         pdf.dispatch_message(:complete_objects)
 
@@ -53,10 +82,6 @@ module Submissions
       audit_trail.pages.each { |page| result.pages << result.import(page) }
 
       result
-    end
-
-    def sign_reason
-      'Signed with DocuSeal.co'
     end
   end
 end

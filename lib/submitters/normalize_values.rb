@@ -4,68 +4,92 @@ module Submitters
   module NormalizeValues
     CHECKSUM_CACHE_STORE = ActiveSupport::Cache::MemoryStore.new
 
+    BASE64_PREFIX_REGEXP = %r{\Adata:image/\w+;base64,}
+
     BaseError = Class.new(StandardError)
 
     UnknownFieldName = Class.new(BaseError)
     InvalidDefaultValue = Class.new(BaseError)
     UnknownSubmitterName = Class.new(BaseError)
-    UnableToDownload = Class.new(BaseError)
+
+    TRUE_VALUES = ['1', 'true', true, 'TRUE', 'True', 'yes', 'YES', 'Yes'].freeze
+    FALSE_VALUES = ['0', 'false', false, 'FALSE', 'False', 'no', 'NO', 'No'].freeze
 
     module_function
 
-    def call(template, values, submitter_name: nil, for_submitter: nil, throw_errors: false)
-      fields = fetch_fields(template, submitter_name:, for_submitter:)
+    def call(template, values, submitter_name: nil, role_names: nil, for_submitter: nil, throw_errors: false)
+      fields =
+        if role_names.present?
+          fetch_roles_fields(template, roles: role_names)
+        else
+          fetch_fields(template, submitter_name:, for_submitter:)
+        end
 
       fields_uuid_index = fields.index_by { |e| e['uuid'] }
       fields_name_index = build_fields_index(fields)
 
       attachments = []
 
-      normalized_values = values.to_h.filter_map do |key, value|
-        if fields_uuid_index[key].blank?
-          original_key = key
-
-          key = fields_name_index[key]&.dig('uuid') || fields_name_index[key.to_s.downcase]&.dig('uuid')
-
-          raise(UnknownFieldName, "Unknown field: #{original_key}") if key.blank? && throw_errors
-        end
-
+      normalized_values = values.to_h.each_with_object({}) do |(key, value), acc|
         next if key.blank?
 
-        field = fields_uuid_index[key]
+        uuid_field = fields_uuid_index[key]
 
-        if field['type'].in?(%w[initials signature image file stamp]) && value.present?
-          new_value, new_attachments =
-            normalize_attachment_value(value, field['type'], template.account, attachments, for_submitter)
+        value_fields = [uuid_field] if uuid_field
 
-          attachments.push(*new_attachments)
+        if value_fields.blank?
+          value_fields = fields_name_index[key].presence || fields_name_index[key.to_s.downcase]
 
-          value = new_value
+          raise(UnknownFieldName, "Unknown field: #{key}") if value_fields.blank? && throw_errors
         end
 
-        [key, normalize_value(field, value)]
-      end.to_h
+        next if value_fields.blank?
+
+        value_fields.each do |field|
+          if field['type'].in?(%w[initials signature image file stamp]) && value.present?
+            new_value, new_attachments =
+              normalize_attachment_value(value, field, template.account, attachments, for_submitter)
+
+            attachments.push(*new_attachments)
+
+            acc[field['uuid']] = normalize_value(field, new_value)
+          else
+            acc[field['uuid']] = normalize_value(field, value)
+          end
+        end
+      end
 
       [normalized_values, attachments]
     end
 
     def normalize_value(field, value)
-      if field['type'] == 'text' && value.present?
+      if field['type'] == 'checkbox'
+        return true if TRUE_VALUES.include?(value)
+        return false if FALSE_VALUES.include?(value)
+      end
+
+      return nil if value.blank?
+
+      if field['type'] == 'text'
         value.to_s
-      elsif field['type'] == 'number' && value.present?
+      elsif field['type'] == 'number'
         (value.to_f % 1).zero? ? value.to_i : value.to_f
-      elsif field['type'] == 'date' && value.present? && value != '{{date}}'
-        if value.is_a?(Integer)
-          Time.zone.at(value.to_s.first(10).to_i).to_date
-        else
-          Date.parse(value).to_s
-        end
+      elsif field['type'] == 'date' && value != '{{date}}'
+        normalize_date(field, value)
       else
         value
       end
-    rescue Date::Error => e
-      Rollbar.warning(e) if defined?(Rollbar)
+    end
 
+    def normalize_date(field, value)
+      if value.is_a?(Integer)
+        Time.zone.at(value.to_s.first(10).to_i).to_date.to_s
+      elsif value.gsub(/\w/, '0') == field.dig('preferences', 'format').to_s.gsub(/\w/, '0')
+        TimeUtils.parse_date_string(value, field.dig('preferences', 'format')).to_s
+      else
+        Date.parse(value).to_s
+      end
+    rescue Date::Error
       value
     end
 
@@ -88,23 +112,37 @@ module Submitters
       end
     end
 
-    def build_fields_index(fields)
-      fields.index_by { |e| e['name'] }
-            .merge(fields.index_by { |e| e['name'].to_s.parameterize.underscore })
-            .merge(fields.index_by { |e| e['name'].to_s.downcase })
+    def fetch_roles_fields(template, roles:)
+      submitters = roles.map do |submitter_name|
+        template.submitters.find { |e| e['name'] == submitter_name } ||
+          raise(UnknownSubmitterName,
+                "Unknown submitter role: #{submitter_name}. Template defines #{template.submitters.pluck('name')}")
+      end
+
+      role_uuids = submitters.pluck('uuid')
+
+      template.fields.select do |e|
+        role_uuids.include?(e['submitter_uuid'])
+      end
     end
 
-    def normalize_attachment_value(value, type, account, attachments, for_submitter = nil)
+    def build_fields_index(fields)
+      fields.group_by { |e| e['name'] }
+            .merge(fields.group_by { |e| e['name'].to_s.parameterize.underscore })
+            .merge(fields.group_by { |e| e['name'].to_s.downcase })
+    end
+
+    def normalize_attachment_value(value, field, account, attachments, for_submitter = nil)
       if value.is_a?(Array)
         new_attachments = value.map do |v|
-          new_attachment = find_or_build_attachment(v, type, account, for_submitter)
+          new_attachment = find_or_build_attachment(v, field, account, for_submitter)
 
           attachments.find { |a| a.blob_id == new_attachment.blob_id } || new_attachment
         end
 
         [new_attachments.map(&:uuid), new_attachments]
       else
-        new_attachment = find_or_build_attachment(value, type, account, for_submitter)
+        new_attachment = find_or_build_attachment(value, field, account, for_submitter)
 
         existing_attachment = attachments.find { |a| a.blob_id == new_attachment.blob_id }
 
@@ -114,14 +152,19 @@ module Submitters
       end
     end
 
-    def find_or_build_attachment(value, type, account, for_submitter = nil)
+    def find_or_build_attachment(value, field, account, for_submitter = nil)
+      type = field['type']
+
       blob =
         if value.match?(%r{\Ahttps?://})
           find_or_create_blob_from_url(account, value)
         elsif type.in?(%w[signature initials]) && value.length < 60
           find_or_create_blob_from_text(account, value, type)
-        elsif (data = Base64.decode64(value)) && Marcel::MimeType.for(data).include?('image')
+        elsif (data = Base64.decode64(value.sub(BASE64_PREFIX_REGEXP, ''))) &&
+              Marcel::MimeType.for(data).exclude?('octet-stream')
           find_or_create_blob_from_base64(account, data, type)
+        elsif type == 'image' && (value.starts_with?('<html>') || value.starts_with?('<!DOCTYPE'))
+          find_or_create_blob_from_html(account, value, field)
         else
           raise InvalidDefaultValue, "Invalid value, url, base64 or text < 60 chars is expected: #{value.first(200)}..."
         end
@@ -134,6 +177,10 @@ module Submitters
       )
 
       attachment
+    end
+
+    def find_or_create_blob_from_html(_account, value, _field)
+      raise InvalidDefaultValue, "HTML content is not allowed: #{value.first(200)}..."
     end
 
     def find_or_create_blob_from_base64(account, data, type)
@@ -168,12 +215,7 @@ module Submitters
 
       return blob if blob
 
-      uri = Addressable::URI.parse(url)
-      resp = conn.get(uri.display_uri.to_s)
-
-      raise UnableToDownload, "Error loading: #{uri.display_uri}" if resp.status >= 400
-
-      data = resp.body
+      data = DownloadUtils.call(url).body
 
       checksum = Digest::MD5.base64digest(data)
 
@@ -197,12 +239,6 @@ module Submitters
       return blob if account.submitters.exists?(id: blob.attachments.where(record_type: 'Submitter').select(:record_id))
 
       nil
-    end
-
-    def conn
-      Faraday.new do |faraday|
-        faraday.response :follow_redirects
-      end
     end
   end
 end

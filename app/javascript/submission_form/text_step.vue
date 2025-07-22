@@ -3,14 +3,19 @@
     v-if="showFieldNames && (field.name || field.title)"
     :for="field.uuid"
     dir="auto"
-    class="label text-2xl"
+    class="label text-xl sm:text-2xl py-0 mb-2 sm:mb-3.5 field-name-label"
     :class="{ 'mb-2': !field.description }"
-  ><MarkdownContent
-     v-if="field.title"
-     :string="field.title"
-   />
+  >
+    <MarkdownContent
+      v-if="field.title"
+      :string="field.title"
+    />
     <template v-else>{{ field.name }}</template>
-    <template v-if="!field.required">({{ t('optional') }})</template>
+    <template v-if="!field.required">
+      <span :class="{ 'hidden sm:inline': (field.title || field.name).length > 20 }">
+        ({{ t('optional') }})
+      </span>
+    </template>
   </label>
   <div
     v-else
@@ -19,7 +24,7 @@
   <div
     v-if="field.description"
     dir="auto"
-    class="mb-3 px-1"
+    class="mb-3 px-1 field-description-text"
   >
     <MarkdownContent :string="field.description" />
   </div>
@@ -38,8 +43,8 @@
       :placeholder="`${t('type_here_')}${field.required ? '' : ` (${t('optional')})`}`"
       type="text"
       :name="`values[${field.uuid}]`"
-      @invalid="field.validation?.message ? $event.target.setCustomValidity(field.validation.message) : ''"
-      @input="field.validation?.message ? $event.target.setCustomValidity('') : ''"
+      @invalid="validationMessage ? $event.target.setCustomValidity(validationMessage) : ''"
+      @input="validationMessage ? $event.target.setCustomValidity('') : ''"
       @focus="$emit('focus')"
     >
     <textarea
@@ -62,7 +67,7 @@
     >
       <a
         href="#"
-        class="btn btn-ghost btn-circle btn-sm"
+        class="btn btn-ghost btn-circle btn-sm toggle-multiline-text-button"
         @click.prevent="toggleTextArea"
       >
         <IconAlignBoxLeftTop />
@@ -112,12 +117,36 @@ export default {
         const area = this.field.areas?.[0]
 
         if (area) {
-          return parseInt(area.w / area.cell_w) + 1
+          const num = area.w / area.cell_w
+
+          return (num % 1) > 0.2 ? parseInt(num) + 1 : parseInt(num)
         } else {
           return null
         }
       } else {
         return null
+      }
+    },
+    lengthValidation () {
+      if (this.field.validation?.pattern) {
+        return this.field.validation.pattern.match(/^\.{(?<min>\d+),(?<max>\d+)?}$/)?.groups
+      } else {
+        return null
+      }
+    },
+    validationMessage () {
+      if (this.field.validation?.message) {
+        return this.field.validation.message
+      } else if (this.lengthValidation) {
+        const number =
+          [this.lengthValidation.min, this.lengthValidation.max]
+            .filter(Boolean)
+            .filter((v, i, a) => a.indexOf(v) === i)
+            .join('-')
+
+        return this.t('must_be_characters_length').replace('{number}', number)
+      } else {
+        return ''
       }
     },
     text: {
@@ -144,8 +173,10 @@ export default {
     resizeTextarea () {
       const textarea = this.$refs.textarea
 
-      textarea.style.height = 'auto'
-      textarea.style.height = textarea.scrollHeight + 'px'
+      if (textarea) {
+        textarea.style.height = 'auto'
+        textarea.style.height = Math.min(250, textarea.scrollHeight) + 'px'
+      }
     },
     toggleTextArea () {
       this.isTextArea = true

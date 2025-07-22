@@ -19,7 +19,9 @@ module Submissions
     end
 
     def normalize_submitter_params!(submitter_params, template, index = nil, for_submitter: nil)
-      default_values = submitter_params[:values] || {}
+      with_values = submitter_params[:values].present?
+
+      default_values = with_values ? submitter_params[:values] : {}
 
       submitter_params[:fields]&.each do |f|
         default_values[f[:name].presence || f[:uuid]] = f[:default_value] if f.key?(:default_value)
@@ -33,8 +35,9 @@ module Submissions
                                          default_values,
                                          submitter_name: submitter_params[:role] ||
                                                          template.submitters.dig(index, 'name'),
+                                         role_names: submitter_params[:roles],
                                          for_submitter:,
-                                         throw_errors: true)
+                                         throw_errors: !with_values)
 
       submitter_params[:values] = values
 
@@ -48,13 +51,15 @@ module Submissions
 
       submitters.each do |submitter|
         submitter.values.each_value do |value|
-          attachment = attachments_index[value]
+          Array.wrap(value).each do |v|
+            attachment = attachments_index[v]
 
-          next unless attachment
+            next unless attachment
 
-          attachment.record = submitter
+            attachment.record = submitter
 
-          attachment.save!
+            attachment.save!
+          end
         end
       end
     end

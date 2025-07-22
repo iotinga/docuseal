@@ -12,11 +12,13 @@ end
 
 ActiveSupport.on_load(:active_storage_blob) do
   attribute :uuid, :string, default: -> { SecureRandom.uuid }
+  attribute :io_data, :string, default: ''
 
-  def self.proxy_url(blob, expires_at: nil)
+  def self.proxy_url(blob, expires_at: nil, filename: nil, host: nil)
     Rails.application.routes.url_helpers.blobs_proxy_url(
-      signed_uuid: blob.signed_uuid(expires_at:), filename: blob.filename,
-      **Docuseal.default_url_options
+      signed_uuid: blob.signed_uuid(expires_at:), filename: filename || blob.filename,
+      **Docuseal.default_url_options,
+      **{ host: }.compact
     )
   end
 
@@ -43,7 +45,7 @@ ActiveStorage::LogSubscriber.detach_from(:active_storage) if Rails.env.productio
 
 Rails.configuration.to_prepare do
   ActiveStorage::DiskController.after_action do
-    response.set_header('Cache-Control', 'public, max-age=31536000') if action_name == 'show'
+    response.set_header('cache-control', 'public, max-age=31536000') if action_name == 'show'
   end
 
   ActiveStorage::Blobs::ProxyController.before_action do

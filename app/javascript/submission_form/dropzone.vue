@@ -1,12 +1,13 @@
 <template>
   <div
+    id="dropzone"
     class="flex h-32 w-full"
     @dragover.prevent
     @drop.prevent="onDropFiles"
   >
     <label
       :for="inputId"
-      class="w-full relative bg-base-300 hover:bg-base-200 rounded-md border border-base-content border-dashed"
+      class="w-full relative bg-base-300 hover:bg-base-200 rounded-md border border-base-content border-dashed file-dropzone"
       :class="{ 'opacity-50': isLoading }"
     >
       <div class="absolute top-0 right-0 left-0 bottom-0 flex items-center justify-center">
@@ -65,6 +66,11 @@ export default {
       type: String,
       required: true
     },
+    dryRun: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     accept: {
       type: String,
       required: false,
@@ -89,7 +95,19 @@ export default {
   },
   methods: {
     onDropFiles (e) {
-      this.uploadFiles(e.dataTransfer.files)
+      const files = Array.from(e.dataTransfer.files).filter((f) => {
+        if (this.accept === 'image/*') {
+          return f.type.startsWith('image')
+        } else {
+          return true
+        }
+      })
+
+      if (this.accept === 'image/*' && !files.length) {
+        alert(this.t('please_upload_an_image_file'))
+      } else {
+        this.uploadFiles(files)
+      }
     },
     onSelectFiles (e) {
       e.preventDefault()
@@ -107,20 +125,36 @@ export default {
         Array.from(files).map(async (file) => {
           const formData = new FormData()
 
-          if (file.type === 'image/bmp') {
-            file = await this.convertBmpToPng(file)
+          if (this.dryRun) {
+            return new Promise((resolve) => {
+              const reader = new FileReader()
+
+              reader.readAsDataURL(file)
+
+              reader.onloadend = () => {
+                resolve({
+                  url: reader.result,
+                  uuid: Math.random().toString(),
+                  filename: file.name
+                })
+              }
+            })
+          } else {
+            if (file.type === 'image/bmp' || file.type === 'image/vnd.microsoft.icon') {
+              file = await this.convertBmpToPng(file)
+            }
+
+            formData.append('file', file)
+            formData.append('submitter_slug', this.submitterSlug)
+            formData.append('name', 'attachments')
+
+            return fetch(this.baseUrl + '/api/attachments', {
+              method: 'POST',
+              body: formData
+            }).then(resp => resp.json()).then((data) => {
+              return data
+            })
           }
-
-          formData.append('file', file)
-          formData.append('submitter_slug', this.submitterSlug)
-          formData.append('name', 'attachments')
-
-          return fetch(this.baseUrl + '/api/attachments', {
-            method: 'POST',
-            body: formData
-          }).then(resp => resp.json()).then((data) => {
-            return data
-          })
         })).then((result) => {
         this.$emit('upload', result)
       }).finally(() => {

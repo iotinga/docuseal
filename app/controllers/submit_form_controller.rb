@@ -7,56 +7,104 @@ class SubmitFormController < ApplicationController
   skip_before_action :authenticate_user!
   skip_authorization_check
 
-  PRELOAD_ALL_PAGES_AMOUNT = 200
+  before_action :load_submitter, only: %i[show update completed]
+  before_action :maybe_render_locked_page, only: :show
+  before_action :maybe_require_link_2fa, only: %i[show update]
+
+  CONFIG_KEYS = [].freeze
 
   def show
-    @submitter = Submitter.find_by!(slug: params[:slug])
+    submission = @submitter.submission
 
     return redirect_to submit_form_completed_path(@submitter.slug) if @submitter.completed_at?
 
-    ActiveRecord::Associations::Preloader.new(
-      records: [@submitter],
-      associations: [submission: [:template, { template_schema_documents: :blob }]]
-    ).call
+    @form_configs = Submitters::FormConfigs.call(@submitter, CONFIG_KEYS)
 
-    total_pages =
-      @submitter.submission.template_schema_documents.sum { |e| e.metadata.dig('pdf', 'number_of_pages').to_i }
+    return render :awaiting if (@form_configs[:enforce_signing_order] ||
+                                submission.template&.preferences&.dig('submitters_order') == 'preserved') &&
+                               !Submitters.current_submitter_order?(@submitter)
 
-    if total_pages < PRELOAD_ALL_PAGES_AMOUNT
-      ActiveRecord::Associations::Preloader.new(
-        records: @submitter.submission.template_schema_documents,
-        associations: [:blob, { preview_images_attachments: :blob }]
-      ).call
-    end
+    Submissions.preload_with_pages(submission)
 
     Submitters::MaybeUpdateDefaultValues.call(@submitter, current_user)
 
-    render(@submitter.submission.template.archived_at? || @submitter.submission.archived_at? ? :archived : :show)
+    @attachments_index = build_attachments_index(submission)
+
+    return unless @form_configs[:prefill_signature]
+
+    if (user_signature = UserConfigs.load_signature(current_user))
+      @signature_attachment = ActiveStorage::Attachment.find_or_create_by!(
+        blob_id: user_signature.blob_id,
+        name: 'attachments',
+        record: @submitter
+      )
+    end
+
+    @signature_attachment ||=
+      Submitters::MaybeAssignDefaultBrowserSignature.call(@submitter, params, cookies, @attachments_index.values)
+
+    @attachments_index[@signature_attachment.uuid] = @signature_attachment if @signature_attachment
   end
 
   def update
-    submitter = Submitter.find_by!(slug: params[:slug])
-
-    if submitter.completed_at?
-      return render json: { error: 'Form has been completed already.' }, status: :unprocessable_entity
+    if @submitter.completed_at?
+      return render json: { error: I18n.t('form_has_been_completed_already') }, status: :unprocessable_entity
     end
 
-    if submitter.template.archived_at? || submitter.submission.archived_at?
-      Rollbar.info("Archived template: #{submitter.template.id}") if defined?(Rollbar)
-
-      return render json: { error: 'Form has been archived.' }, status: :unprocessable_entity
+    if @submitter.submission.template&.archived_at? || @submitter.submission.archived_at?
+      return render json: { error: I18n.t('form_has_been_archived') }, status: :unprocessable_entity
     end
 
-    Submitters::SubmitValues.call(submitter, params, request)
+    if @submitter.submission.expired?
+      return render json: { error: I18n.t('form_has_been_expired') }, status: :unprocessable_entity
+    end
+
+    if @submitter.declined_at?
+      return render json: { error: I18n.t('form_has_been_declined') },
+                    status: :unprocessable_entity
+    end
+
+    Submitters::SubmitValues.call(@submitter, params, request)
 
     head :ok
+  rescue Submitters::SubmitValues::RequiredFieldError => e
+    Rollbar.warning("Required field #{@submitter.id}: #{e.message}") if defined?(Rollbar)
+
+    render json: { field_uuid: e.message }, status: :unprocessable_entity
   rescue Submitters::SubmitValues::ValidationError => e
     render json: { error: e.message }, status: :unprocessable_entity
   end
 
-  def completed
-    @submitter = Submitter.completed.find_by!(slug: params[:submit_form_slug])
-  end
+  def completed; end
 
   def success; end
+
+  private
+
+  def maybe_require_link_2fa
+    return if @submitter.submission.source != 'link'
+    return unless @submitter.submission.template&.preferences&.dig('shared_link_2fa') == true
+    return if cookies.encrypted[:email_2fa_slug] == @submitter.slug
+    return if @submitter.email == current_user&.email && current_user&.account_id == @submitter.account_id
+
+    redirect_to start_form_path(@submitter.submission.template.slug)
+  end
+
+  def maybe_render_locked_page
+    return render :archived if @submitter.submission.template&.archived_at? ||
+                               @submitter.submission.archived_at? ||
+                               @submitter.account.archived_at?
+    return render :expired if @submitter.submission.expired?
+
+    render :declined if @submitter.declined_at?
+  end
+
+  def load_submitter
+    @submitter = Submitter.find_by!(slug: params[:slug] || params[:submit_form_slug])
+  end
+
+  def build_attachments_index(submission)
+    ActiveStorage::Attachment.where(record: submission.submitters, name: :attachments)
+                             .preload(:blob).index_by(&:uuid)
+  end
 end

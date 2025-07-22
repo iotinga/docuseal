@@ -1,42 +1,33 @@
 # frozen_string_literal: true
 
-class SendTemplateUpdatedWebhookRequestJob < ApplicationJob
-  queue_as :webhooks
+class SendTemplateUpdatedWebhookRequestJob
+  include Sidekiq::Job
 
-  USER_AGENT = 'DocuSeal.co Webhook'
+  sidekiq_options queue: :webhooks
 
   MAX_ATTEMPTS = 10
 
-  def perform(template, params = {})
-    attempt = params[:attempt].to_i
-    url = Accounts.load_webhook_url(template.account)
+  def perform(params = {})
+    template = Template.find(params['template_id'])
+    webhook_url = WebhookUrl.find(params['webhook_url_id'])
 
-    return if url.blank?
+    attempt = params['attempt'].to_i
 
-    preferences = Accounts.load_webhook_preferences(template.account)
+    return if webhook_url.url.blank? || webhook_url.events.exclude?('template.updated')
 
-    return if preferences['template.updated'].blank?
-
-    resp = begin
-      Faraday.post(url,
-                   {
-                     event_type: 'template.updated',
-                     timestamp: Time.current,
-                     data: Templates::SerializeForApi.call(template)
-                   }.to_json,
-                   'Content-Type' => 'application/json',
-                   'User-Agent' => USER_AGENT)
-    rescue Faraday::Error
-      nil
-    end
+    resp = SendWebhookRequest.call(webhook_url, event_type: 'template.updated',
+                                                event_uuid: params['event_uuid'],
+                                                record: template,
+                                                attempt:,
+                                                data: Templates::SerializeForApi.call(template))
 
     if (resp.nil? || resp.status.to_i >= 400) && attempt <= MAX_ATTEMPTS &&
        (!Docuseal.multitenant? || template.account.account_configs.exists?(key: :plan))
-      SendTemplateUpdatedWebhookRequestJob.set(wait: (2**attempt).minutes)
-                                          .perform_later(template, {
-                                                           attempt: attempt + 1,
-                                                           last_status: resp&.status.to_i
-                                                         })
+      SendTemplateUpdatedWebhookRequestJob.perform_in((2**attempt).minutes, {
+                                                        **params,
+                                                        'attempt' => attempt + 1,
+                                                        'last_status' => resp&.status.to_i
+                                                      })
     end
   end
 end

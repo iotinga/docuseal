@@ -12,13 +12,20 @@ class TemplatesUploadsController < ApplicationController
 
     save_template!(@template, url_params)
 
-    documents = Templates::CreateAttachments.call(@template, url_params || params)
-
+    documents = Templates::CreateAttachments.call(@template, url_params || params, extract_fields: true)
     schema = documents.map { |doc| { attachment_uuid: doc.uuid, name: doc.filename.base } }
+
+    if @template.fields.blank?
+      @template.fields = Templates::ProcessDocument.normalize_attachment_fields(@template, documents)
+
+      schema.each { |item| item['pending_fields'] = true } if @template.fields.present?
+    end
 
     @template.update!(schema:)
 
-    SendTemplateCreatedWebhookRequestJob.perform_later(@template)
+    WebhookUrls.enqueue_events(@template, 'template.created')
+
+    SearchEntries.enqueue_reindex(@template)
 
     redirect_to edit_template_path(@template)
   rescue Templates::CreateAttachments::PdfEncrypted
@@ -28,7 +35,7 @@ class TemplatesUploadsController < ApplicationController
 
     raise if Rails.env.local?
 
-    redirect_to root_path, alert: 'Unable to upload file'
+    redirect_to root_path, alert: I18n.t('unable_to_update_file')
   end
 
   private
@@ -47,23 +54,18 @@ class TemplatesUploadsController < ApplicationController
   def create_file_params_from_url
     tempfile = Tempfile.new
     tempfile.binmode
-    tempfile.write(conn.get(Addressable::URI.parse(params[:url]).display_uri.to_s).body)
+    tempfile.write(DownloadUtils.call(params[:url]).body)
     tempfile.rewind
+
+    filename = URI.decode_www_form_component(params[:filename]) if params[:filename].present?
+    filename ||= File.basename(URI.decode_www_form_component(params[:url]))
 
     file = ActionDispatch::Http::UploadedFile.new(
       tempfile:,
-      filename: File.basename(
-        URI.decode_www_form_component(params[:filename].presence || params[:url])
-      ),
+      filename:,
       type: Marcel::MimeType.for(tempfile)
     )
 
     { files: [file] }
-  end
-
-  def conn
-    Faraday.new do |faraday|
-      faraday.response :follow_redirects
-    end
   end
 end

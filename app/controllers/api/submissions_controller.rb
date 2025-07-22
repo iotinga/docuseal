@@ -10,19 +10,19 @@ module Api
     end
 
     def index
-      submissions = Submissions.search(@submissions, params[:q])
-      submissions = submissions.where(template_id: params[:template_id]) if params[:template_id].present?
-
-      if params[:template_folder].present?
-        submissions = submissions.joins(template: :folder).where(folder: { name: params[:template_folder] })
-      end
+      submissions = Submissions.search(current_user, @submissions, params[:q])
+      submissions = filter_submissions(submissions, params)
 
       submissions = paginate(submissions.preload(:created_by_user, :submitters,
-                                                 template: :folder,
+                                                 template: { folder: :parent_folder },
+                                                 combined_document_attachment: :blob,
                                                  audit_trail_attachment: :blob))
 
       render json: {
-        data: submissions.as_json(Submissions::SerializeForApi::SERIALIZE_PARAMS),
+        data: submissions.map do |s|
+          Submissions::SerializeForApi.call(s, s.submitters, params,
+                                            with_events: false, with_documents: false, with_values: false)
+        end,
         pagination: {
           count: submissions.size,
           next: submissions.last&.id,
@@ -44,7 +44,7 @@ module Api
         @submission.audit_trail_attachment = Submissions::GenerateAuditTrail.call(@submission)
       end
 
-      render json: Submissions::SerializeForApi.call(@submission, submitters)
+      render json: Submissions::SerializeForApi.call(@submission, submitters, params)
     end
 
     def create
@@ -63,40 +63,83 @@ module Api
 
       submissions = create_submissions(@template, params)
 
-      submissions.each do |submission|
-        SendSubmissionCreatedWebhookRequestJob.perform_later(submission)
-      end
+      WebhookUrls.enqueue_events(submissions, 'submission.created')
 
       Submissions.send_signature_requests(submissions)
 
       submissions.each do |submission|
-        if submission.submitters.all?(&:completed_at?) && submission.submitters.last
-          ProcessSubmitterCompletionJob.perform_later(submission.submitters.last)
+        submission.submitters.each do |submitter|
+          next unless submitter.completed_at?
+
+          ProcessSubmitterCompletionJob.perform_async('submitter_id' => submitter.id, 'send_invitation_email' => false)
         end
       end
 
-      json = submissions.flat_map do |submission|
-        submission.submitters.map do |s|
-          Submitters::SerializeForApi.call(s, with_documents: false, with_urls: true)
-        end
-      end
+      SearchEntries.enqueue_reindex(submissions)
 
-      render json:
-    rescue Submitters::NormalizeValues::BaseError => e
+      render json: build_create_json(submissions)
+    rescue Submitters::NormalizeValues::BaseError, Submissions::CreateFromSubmitters::BaseError,
+           DownloadUtils::UnableToDownload => e
       Rollbar.warning(e) if defined?(Rollbar)
 
       render json: { error: e.message }, status: :unprocessable_entity
     end
 
     def destroy
-      @submission.update!(archived_at: Time.current)
+      if params[:permanently].in?(['true', true])
+        @submission.destroy!
+      else
+        @submission.update!(archived_at: Time.current)
 
-      SendSubmissionArchivedWebhookRequestJob.perform_later(@submission)
+        WebhookUrls.enqueue_events(@submission, 'submission.archived')
+      end
 
-      render json: @submission.as_json(only: %i[id], methods: %i[archived_at])
+      render json: @submission.as_json(only: %i[id archived_at])
     end
 
     private
+
+    def filter_submissions(submissions, params)
+      submissions = submissions.where(template_id: params[:template_id]) if params[:template_id].present?
+      submissions = submissions.where(slug: params[:slug]) if params[:slug].present?
+
+      if params[:template_folder].present?
+        folders =
+          TemplateFolders.filter_by_full_name(TemplateFolder.accessible_by(current_ability), params[:template_folder])
+
+        submissions = submissions.joins(:template).where(template: { folder_id: folders.pluck(:id) })
+      end
+
+      if params.key?(:archived)
+        submissions = params[:archived].in?(['true', true]) ? submissions.archived : submissions.active
+      end
+
+      Submissions::Filter.call(submissions, current_user, params)
+    end
+
+    def build_create_json(submissions)
+      json = submissions.flat_map do |submission|
+        submission.submitters.map do |s|
+          Submitters::SerializeForApi.call(s, with_documents: false, with_urls: true, params:)
+        end
+      end
+
+      if request.path.ends_with?('/init')
+        json =
+          if submissions.size == 1
+            {
+              id: submissions.first.id,
+              submitters: json,
+              expire_at: submissions.first.expire_at,
+              created_at: submissions.first.created_at
+            }
+          else
+            { submitters: json }
+          end
+      end
+
+      json
+    end
 
     def create_submissions(template, params)
       is_send_email = !params[:send_email].in?(['false', false])
@@ -117,7 +160,6 @@ module Api
           template:,
           user: current_user,
           source: :api,
-          mark_as_sent: is_send_email,
           submitters_order: params[:submitters_order] || params[:order] || 'preserved',
           submissions_attrs:,
           params:
@@ -138,13 +180,15 @@ module Api
     def submissions_params
       permitted_attrs = [
         :send_email, :send_sms, :bcc_completed, :completed_redirect_url, :reply_to, :go_to_last,
+        :require_phone_2fa, :expire_at, :name,
         {
           message: %i[subject body],
           submitters: [[:send_email, :send_sms, :completed_redirect_url, :uuid, :name, :email, :role,
                         :completed, :phone, :application_key, :external_id, :reply_to, :go_to_last,
-                        { metadata: {}, values: {}, readonly_fields: [], message: %i[subject body],
+                        :require_phone_2fa,
+                        { metadata: {}, values: {}, roles: [], readonly_fields: [], message: %i[subject body],
                           fields: [:name, :uuid, :default_value, :value, :title, :description,
-                                   :readonly, :redacted, :validation_pattern, :invalid_message,
+                                   :readonly, :required, :validation_pattern, :invalid_message,
                                    { default_value: [], value: [], preferences: {} }] }]]
         }
       ]
@@ -155,7 +199,7 @@ module Api
         key = params.key?(:submission) ? :submission : :submissions
 
         params.permit(
-          key => [permitted_attrs]
+          { key => [permitted_attrs] }, { key => permitted_attrs }
         ).fetch(key, [])
       end
     end

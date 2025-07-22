@@ -1,12 +1,12 @@
 <template>
   <div
-    class="field-area flex absolute lg:text-base -outline-offset-1"
+    class="flex absolute lg:text-base -outline-offset-1 field-area"
     dir="auto"
-    :style="computedStyle"
-    :class="{ 'text-[1.5vw] lg:text-base': !textOverflowChars, 'text-[1.0vw] lg:text-xs': textOverflowChars, 'cursor-default': !submittable, 'border border-red-100 bg-red-100 cursor-pointer': submittable, 'border border-red-100': !isActive && submittable, 'bg-opacity-80': !isActive && !isValueSet && submittable, 'field-area-active outline-red-500 outline-dashed outline-2 z-10': isActive && submittable, 'bg-opacity-40': (isActive || isValueSet) && submittable }"
+    :style="[computedStyle, fontStyle]"
+    :class="{ 'cursor-default': !submittable, 'border border-red-100 bg-red-100 cursor-pointer': submittable, 'border border-red-100': !isActive && submittable, 'bg-opacity-80': !isActive && !isValueSet && submittable, 'outline-red-500 outline-dashed outline-2 z-10 field-area-active': isActive && submittable, 'bg-opacity-40': (isActive || isValueSet) && submittable }"
   >
     <div
-      v-if="!isActive && !isValueSet && field.type !== 'checkbox' && submittable && !area.option_uuid"
+      v-if="(!withFieldPlaceholder || !field.name || field.type === 'cells') && !isActive && !isValueSet && field.type !== 'checkbox' && submittable && !area.option_uuid"
       class="absolute top-0 bottom-0 right-0 left-0 items-center justify-center h-full w-full"
     >
       <span
@@ -23,25 +23,25 @@
     </div>
     <div
       v-if="isActive && withLabel && (!area.option_uuid || !option.value)"
-      class="absolute -top-7 rounded bg-base-content text-base-100 px-2 text-sm whitespace-nowrap pointer-events-none"
+      class="absolute -top-7 rounded bg-base-content text-base-100 px-2 text-sm whitespace-nowrap pointer-events-none field-area-active-label"
     >
       <template v-if="area.option_uuid && !option.value">
         {{ optionValue(option) }}
       </template>
       <template v-else>
-        {{ field.name || fieldNames[field.type] }}
+        {{ field.title || field.name || fieldNames[field.type] }}
         <template v-if="field.type === 'checkbox' && !field.name">
           {{ fieldIndex + 1 }}
         </template>
         <template v-else-if="!field.required && field.type !== 'checkbox'">
-          (optional)
+          ({{ t('optional') }})
         </template>
       </template>
     </div>
     <div
-      v-if="isActive"
       ref="scrollToElem"
-      class="absolute -top-20"
+      class="absolute"
+      :style="{ top: scrollPadding }"
     />
     <img
       v-if="field.type === 'image' && image"
@@ -53,18 +53,47 @@
       class="object-contain mx-auto"
       :src="stamp.url"
     >
-    <img
+    <div
       v-else-if="field.type === 'signature' && signature"
-      class="object-contain mx-auto"
-      :src="signature.url"
+      class="flex justify-between h-full gap-1 overflow-hidden w-full"
+      :class="isNarrow && (isShowSignatureId || field.preferences?.reason_field_uuid) ? 'flex-row' : 'flex-col'"
     >
+      <div
+        class="flex overflow-hidden"
+        :class="isNarrow && (isShowSignatureId || field.preferences?.reason_field_uuid) ? 'w-1/2' : 'flex-grow'"
+        style="min-height: 50%"
+      >
+        <img
+          class="object-contain mx-auto"
+          :src="signature.url"
+        >
+      </div>
+      <div
+        v-if="isShowSignatureId || field.preferences?.reason_field_uuid"
+        class="text-[1vw] lg:text-[0.55rem] lg:leading-[0.65rem]"
+        :class="isNarrow ? 'w-1/2' : 'w-full'"
+      >
+        <div class="truncate uppercase">
+          ID: {{ signature.uuid }}
+        </div>
+        <div>
+          <span v-if="values[field.preferences?.reason_field_uuid]">{{ t('reason') }}: </span>{{ values[field.preferences?.reason_field_uuid] || t('digitally_signed_by') }} {{ submitter.name }}
+          <template v-if="submitter.email">
+            &lt;{{ submitter.email }}&gt;
+          </template>
+        </div>
+        <div>
+          {{ new Date(signature.created_at).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: 'numeric', timeZoneName: 'short' }) }}
+        </div>
+      </div>
+    </div>
     <img
       v-else-if="field.type === 'initials' && initials"
       class="object-contain mx-auto"
       :src="initials.url"
     >
     <div
-      v-else-if="field.type === 'file' || field.type === 'payment'"
+      v-else-if="(field.type === 'file' || field.type === 'payment') && attachments.length"
       class="px-0.5 flex flex-col justify-center"
     >
       <a
@@ -74,7 +103,7 @@
         :href="attachment.url"
       >
         <IconPaperclip
-          class="inline w-[1.5vw] h-[1.5vw] lg:w-4 lg:h-4"
+          class="inline w-[1.6vw] h-[1.6vw] lg:w-4 lg:h-4"
         />
         {{ attachment.filename }}
       </a>
@@ -142,6 +171,7 @@
     <div
       v-else-if="field.type === 'cells'"
       class="w-full flex items-center"
+      :class="{ 'justify-end': field.preferences?.align === 'right', ...fontClasses }"
     >
       <div
         v-for="(char, index) in modelValue"
@@ -156,16 +186,30 @@
       v-else
       ref="textContainer"
       dir="auto"
-      class="flex items-center px-0.5 w-full"
-      :class="alignClasses[field.preferences?.align]"
+      class="flex px-0.5 w-full"
+      :class="{ ...alignClasses, ...fontClasses }"
     >
-      <span v-if="Array.isArray(modelValue)">
+      <span
+        v-if="field && field.name && withFieldPlaceholder && !modelValue && modelValue !== 0"
+        class="whitespace-pre-wrap text-gray-400"
+        :class="{ 'w-full': field.preferences?.align }"
+      >{{ field.name }}</span>
+      <span
+        v-else-if="Array.isArray(modelValue)"
+        :class="{ 'w-full': field.preferences?.align }"
+      >
         {{ modelValue.join(', ') }}
       </span>
-      <span v-else-if="field.type === 'date'">
+      <span
+        v-else-if="field.type === 'date'"
+        :class="{ 'w-full': field.preferences?.align }"
+      >
         {{ formattedDate }}
       </span>
-      <span v-else-if="field.type === 'number'">
+      <span
+        v-else-if="field.type === 'number'"
+        class="w-full"
+      >
         {{ formatNumber(modelValue, field.preferences?.format) }}
       </span>
       <span
@@ -178,7 +222,7 @@
 </template>
 
 <script>
-import { IconTextSize, IconWritingSign, IconCalendarEvent, IconPhoto, IconCheckbox, IconPaperclip, IconSelect, IconCircleDot, IconChecks, IconCheck, IconColumns3, IconPhoneCheck, IconLetterCaseUpper, IconCreditCard, IconRubberStamp, IconSquareNumber1 } from '@tabler/icons-vue'
+import { IconTextSize, IconWritingSign, IconCalendarEvent, IconPhoto, IconCheckbox, IconPaperclip, IconSelect, IconCircleDot, IconChecks, IconCheck, IconColumns3, IconPhoneCheck, IconLetterCaseUpper, IconCreditCard, IconRubberStamp, IconSquareNumber1, IconId } from '@tabler/icons-vue'
 
 export default {
   name: 'FieldArea',
@@ -192,7 +236,32 @@ export default {
       type: Object,
       required: true
     },
+    isInlineSize: {
+      type: Boolean,
+      required: false,
+      default: true
+    },
+    submitter: {
+      type: Object,
+      required: false,
+      default: () => ({})
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     isValueSet: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    scrollPadding: {
+      type: String,
+      required: false,
+      default: '-80px'
+    },
+    withFieldPlaceholder: {
       type: Boolean,
       required: false,
       default: false
@@ -206,6 +275,11 @@ export default {
       type: [Array, String, Number, Object, Boolean],
       required: false,
       default: ''
+    },
+    values: {
+      type: Object,
+      required: false,
+      default: () => ({})
     },
     isActive: {
       type: Boolean,
@@ -255,14 +329,41 @@ export default {
         cells: this.t('cells'),
         stamp: this.t('stamp'),
         payment: this.t('payment'),
-        phone: this.t('phone')
+        phone: this.t('phone'),
+        verification: this.t('verify_id')
+      }
+    },
+    isShowSignatureId () {
+      if ([true, false].includes(this.field.preferences?.with_signature_id)) {
+        return this.field.preferences.with_signature_id
+      } else {
+        return this.withSignatureId
       }
     },
     alignClasses () {
+      if (!this.field.preferences) {
+        return { 'items-center': true }
+      }
+
       return {
-        center: 'text-center',
-        left: 'text-left',
-        right: 'text-right'
+        'text-center': this.field.preferences.align === 'center',
+        'text-left': this.field.preferences.align === 'left',
+        'text-right': this.field.preferences.align === 'right',
+        'items-center': !this.field.preferences.valign || this.field.preferences.valign === 'center',
+        'items-start': this.field.preferences.valign === 'top',
+        'items-end': this.field.preferences.valign === 'bottom'
+      }
+    },
+    fontClasses () {
+      if (!this.field.preferences) {
+        return {}
+      }
+
+      return {
+        'font-courier': this.field.preferences.font === 'Courier',
+        'font-times': this.field.preferences.font === 'Times',
+        'font-bold': ['bold_italic', 'bold'].includes(this.field.preferences.font_type),
+        italic: ['bold_italic', 'italic'].includes(this.field.preferences.font_type)
       }
     },
     option () {
@@ -284,7 +385,8 @@ export default {
         cells: IconColumns3,
         multiple: IconChecks,
         phone: IconPhoneCheck,
-        payment: IconCreditCard
+        payment: IconCreditCard,
+        verification: IconId
       }
     },
     image () {
@@ -337,22 +439,59 @@ export default {
         return []
       }
     },
+    fontStyle () {
+      let fontSize = ''
+
+      if (this.isInlineSize) {
+        if (this.textOverflowChars) {
+          fontSize = `${this.fontSizePx / 1.5 / 10}cqmin`
+        } else {
+          fontSize = `${this.fontSizePx / 10}cqmin`
+        }
+      } else {
+        if (this.textOverflowChars) {
+          fontSize = `clamp(1pt, ${this.fontSizePx / 1.5 / 10}vw, ${this.fontSizePx / 1.5}px)`
+        } else {
+          fontSize = `clamp(1pt, ${this.fontSizePx / 10}vw, ${this.fontSizePx}px)`
+        }
+      }
+
+      return { fontSize, lineHeight: `calc(${fontSize} * ${this.lineHeight})` }
+    },
+    fontSizePx () {
+      return parseInt(this.field?.preferences?.font_size || 11) * this.fontScale
+    },
+    lineHeight () {
+      return 1.3
+    },
+    fontScale () {
+      return 1000 / 612.0
+    },
     computedStyle () {
       const { x, y, w, h } = this.area
 
-      return {
+      const style = {
         top: y * 100 + '%',
         left: x * 100 + '%',
         width: w * 100 + '%',
         height: h * 100 + '%'
       }
+
+      if (this.field.preferences?.color) {
+        style.color = this.field.preferences.color
+      }
+
+      return style
+    },
+    isNarrow () {
+      return this.area.h > 0 && (this.area.w / this.area.h) > 6
     }
   },
   watch: {
     modelValue () {
       this.$nextTick(() => {
         if (['date', 'text', 'number'].includes(this.field.type) && this.$refs.textContainer && (this.textOverflowChars === 0 || (this.textOverflowChars - 4) > `${this.modelValue}`.length)) {
-          this.textOverflowChars = this.$refs.textContainer.scrollHeight > this.$refs.textContainer.clientHeight ? `${this.modelValue}`.length : 0
+          this.textOverflowChars = this.$refs.textContainer.scrollHeight > (this.$refs.textContainer.clientHeight + 1) ? `${this.modelValue || (this.withFieldPlaceholder ? this.field.name : '')}`.length : 0
         }
       })
     }
@@ -360,7 +499,7 @@ export default {
   mounted () {
     this.$nextTick(() => {
       if (['date', 'text', 'number'].includes(this.field.type) && this.$refs.textContainer) {
-        this.textOverflowChars = this.$refs.textContainer.scrollHeight > this.$refs.textContainer.clientHeight ? `${this.modelValue}`.length : 0
+        this.textOverflowChars = this.$refs.textContainer.scrollHeight > (this.$refs.textContainer.clientHeight + 1) ? `${this.modelValue || (this.withFieldPlaceholder ? this.field.name : '')}`.length : 0
       }
     })
   },
@@ -377,8 +516,18 @@ export default {
       }
     },
     formatNumber (number, format) {
+      if (!number && number !== 0) {
+        return ''
+      }
+
       if (format === 'comma') {
         return new Intl.NumberFormat('en-US').format(number)
+      } else if (format === 'usd') {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
+      } else if (format === 'gbp') {
+        return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
+      } else if (format === 'eur') {
+        return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
       } else if (format === 'dot') {
         return new Intl.NumberFormat('de-DE').format(number)
       } else if (format === 'space') {

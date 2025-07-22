@@ -49,11 +49,15 @@ class User < ApplicationRecord
 
   EMAIL_REGEXP = /[^@;,<>\s]+@[^@;,<>\s]+/
 
+  FULL_EMAIL_REGEXP =
+    /\A[a-z0-9][\.']?(?:(?:[a-z0-9_-]+[\.\+'])*[a-z0-9_-]+)*@(?:[a-z0-9]+[\.-])*[a-z0-9]+\.[a-z]{2,}\z/i
+
   has_one_attached :signature
   has_one_attached :initials
 
   belongs_to :account
   has_one :access_token, dependent: :destroy
+  has_many :access_tokens, dependent: :destroy
   has_many :templates, dependent: :destroy, foreign_key: :author_id, inverse_of: :author
   has_many :template_folders, dependent: :destroy, foreign_key: :author_id, inverse_of: :author
   has_many :user_configs, dependent: :destroy
@@ -69,6 +73,8 @@ class User < ApplicationRecord
   scope :archived, -> { where.not(archived_at: nil) }
   scope :admins, -> { where(role: ADMIN_ROLE) }
 
+  validates :email, format: { with: /\A[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\z/ }
+
   def access_token
     super || build_access_token.tap(&:save!)
   end
@@ -79,6 +85,12 @@ class User < ApplicationRecord
 
   def remember_me
     true
+  end
+
+  def sidekiq?
+    return true if Rails.env.development?
+
+    role == 'admin'
   end
 
   def self.sign_in_after_reset_password

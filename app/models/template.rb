@@ -10,6 +10,7 @@
 #  name        :string           not null
 #  preferences :text             not null
 #  schema      :text             not null
+#  shared_link :boolean          default(FALSE), not null
 #  slug        :string           not null
 #  source      :text             not null
 #  submitters  :text             not null
@@ -22,10 +23,13 @@
 #
 # Indexes
 #
-#  index_templates_on_account_id  (account_id)
-#  index_templates_on_author_id   (author_id)
-#  index_templates_on_folder_id   (folder_id)
-#  index_templates_on_slug        (slug) UNIQUE
+#  index_templates_on_account_id                       (account_id)
+#  index_templates_on_account_id_and_folder_id_and_id  (account_id,folder_id,id) WHERE (archived_at IS NULL)
+#  index_templates_on_account_id_and_id_archived       (account_id,id) WHERE (archived_at IS NOT NULL)
+#  index_templates_on_author_id                        (author_id)
+#  index_templates_on_external_id                      (external_id)
+#  index_templates_on_folder_id                        (folder_id)
+#  index_templates_on_slug                             (slug) UNIQUE
 #
 # Foreign Keys
 #
@@ -40,12 +44,14 @@ class Template < ApplicationRecord
   belongs_to :account
   belongs_to :folder, class_name: 'TemplateFolder'
 
+  has_one :search_entry, as: :record, inverse_of: :record, dependent: :destroy if SearchEntry.table_exists?
+
   before_validation :maybe_set_default_folder, on: :create
 
   attribute :preferences, :string, default: -> { {} }
   attribute :fields, :string, default: -> { [] }
   attribute :schema, :string, default: -> { [] }
-  attribute :submitters, :string, default: -> { [{ name: DEFAULT_SUBMITTER_NAME, uuid: SecureRandom.uuid }] }
+  attribute :submitters, :string, default: -> { [{ name: I18n.t(:first_party), uuid: SecureRandom.uuid }] }
   attribute :slug, :string, default: -> { SecureRandom.base58(14) }
   attribute :source, :string, default: 'native'
 
@@ -61,14 +67,17 @@ class Template < ApplicationRecord
 
   has_many :submissions, dependent: :destroy
   has_many :template_sharings, dependent: :destroy
+  has_many :template_accesses, dependent: :destroy
 
   scope :active, -> { where(archived_at: nil) }
   scope :archived, -> { where.not(archived_at: nil) }
 
-  delegate :name, to: :folder, prefix: true
-
   def application_key
     external_id
+  end
+
+  def folder_name
+    folder.full_name
   end
 
   private

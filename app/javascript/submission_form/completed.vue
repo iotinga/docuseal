@@ -1,6 +1,7 @@
 <template>
   <div
-    class="mx-auto max-w-md flex flex-col"
+    id="form_completed"
+    class="mx-auto max-w-md flex flex-col completed-form"
     dir="auto"
   >
     <div class="font-medium text-2xl flex items-center space-x-1.5 mx-auto">
@@ -9,13 +10,13 @@
         :width="30"
         :height="30"
       />
-      <span>
-        {{ completedMessage.title || t('form_has_been_completed') }}
+      <span class="completed-form-message-title">
+        {{ completedMessage.title || (hasSignatureFields ? (hasMultipleDocuments ? t('documents_have_been_signed') : t('document_has_been_signed')) : t('form_has_been_completed')) }}
       </span>
     </div>
     <div
       v-if="completedMessage.body"
-      class="mt-2"
+      class="mt-2 completed-form-message-body"
     >
       <MarkdownContent
         :string="completedMessage.body"
@@ -26,7 +27,7 @@
         v-if="completedButton.url"
         :href="sanitizeHref(completedButton.url)"
         rel="noopener noreferrer nofollow"
-        class="white-button flex items-center w-full"
+        class="white-button flex items-center w-full completed-form-completed-button"
       >
         <span>
           {{ completedButton.title || 'Back to Website' }}
@@ -34,7 +35,7 @@
       </a>
       <button
         v-if="canSendEmail && !isDemo && withSendCopyButton"
-        class="white-button !h-auto flex items-center space-x-1 w-full"
+        class="white-button !h-auto flex items-center space-x-1 w-full completed-form-send-copy-button"
         :disabled="isSendingCopy"
         @click.prevent="sendCopyToEmail"
       >
@@ -49,7 +50,7 @@
       </button>
       <button
         v-if="!isWebView && withDownloadButton"
-        class="base-button flex items-center space-x-1 w-full"
+        class="base-button flex items-center space-x-1 w-full completed-form-download-button"
         :disabled="isDownloading"
         @click.prevent="download"
       >
@@ -75,7 +76,7 @@
       </a>
       <a
         v-if="isDemo"
-        href="https://docuseal.co/sign_up"
+        href="https://docuseal.com/sign_up"
         class="white-button flex items-center space-x-1 w-full"
       >
         <IconLogin />
@@ -88,9 +89,9 @@
       v-if="attribution"
       class="text-center mt-4"
     >
-      {{ t('signed_with') }}
+      {{ t('powered_by') }}
       <a
-        href="https://www.docuseal.co/start"
+        href="https://www.docuseal.com/start"
         target="_blank"
         class="underline"
       >DocuSeal</a> - {{ t('open_source_documents_software') }}
@@ -128,6 +129,16 @@ export default {
       type: Boolean,
       required: false,
       default: true
+    },
+    hasSignatureFields: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    hasMultipleDocuments: {
+      type: Boolean,
+      required: false,
+      default: false
     },
     withDownloadButton: {
       type: Boolean,
@@ -181,6 +192,10 @@ export default {
         spread: 140
       })
     }
+
+    document.querySelectorAll('#decline_button').forEach((button) => {
+      button.setAttribute('disabled', 'true')
+    })
   },
   methods: {
     sendCopyToEmail () {
@@ -200,7 +215,8 @@ export default {
       fetch(this.baseUrl + `/submitters/${this.submitterSlug}/download`).then(async (response) => {
         if (response.ok) {
           const urls = await response.json()
-          const isSafariIos = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+          const isMobileSafariIos = 'ontouchstart' in window && navigator.maxTouchPoints > 0 && /AppleWebKit/i.test(navigator.userAgent)
+          const isSafariIos = isMobileSafariIos || /iPhone|iPad|iPod/i.test(navigator.userAgent)
 
           if (isSafariIos && urls.length > 1) {
             this.downloadSafariIos(urls)
@@ -208,7 +224,7 @@ export default {
             this.downloadUrls(urls)
           }
         } else {
-          alert('Failed to download files')
+          alert(this.t('failed_to_download_files'))
         }
       })
     },

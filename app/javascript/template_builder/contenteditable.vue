@@ -10,6 +10,7 @@
       style="min-width: 2px"
       :class="iconInline ? 'inline' : 'block'"
       class="peer outline-none focus:block"
+      @paste.prevent="onPaste"
       @keydown.enter.prevent="blurContenteditable"
       @focus="$emit('focus', $event)"
       @blur="onBlur"
@@ -97,6 +98,17 @@ export default {
     }
   },
   methods: {
+    onPaste (e) {
+      const text = (e.clipboardData || window.clipboardData).getData('text/plain')
+
+      const selection = this.$el.getRootNode().getSelection()
+
+      if (selection.rangeCount) {
+        selection.deleteFromDocument()
+        selection.getRangeAt(0).insertNode(document.createTextNode(text))
+        selection.collapseToEnd()
+      }
+    },
     selectContent () {
       const el = this.$refs.contenteditable
 

@@ -3,7 +3,7 @@
     <div v-if="selectedSheetIndex === null && spreadsheet">
       <form @submit.prevent="[selectedSheetIndex = $refs.selectWorksheet.value, buildDefaultMappings()]">
         <label class="label">
-          Select Worksheet
+          {{ t('select_worksheet') }}
         </label>
         <select
           ref="selectWorksheet"
@@ -18,7 +18,7 @@
           </option>
         </select>
         <button class="base-button mt-4 w-full">
-          Open
+          {{ t('open') }}
         </button>
       </form>
     </div>
@@ -36,10 +36,10 @@
         </div>
         <div class="flex">
           <div class="relative w-full py-2 px-2 text-sm">
-            Recipient field
+            {{ t('recipient_field') }}
           </div>
           <div class="relative w-full py-2 pl-4 text-sm">
-            Spreadsheet column
+            {{ t('spreadsheet_column') }}
           </div>
         </div>
         <div
@@ -50,6 +50,7 @@
           <div class="flex">
             <select
               class="base-select !select-sm !h-10"
+              :class="{ '!text-gray-300': !mapping.field_name }"
               required
               @change="mapping.field_name = $event.target.value"
             >
@@ -58,13 +59,14 @@
                 value=""
                 :selected="!mapping.field_name"
               >
-                Select Field
+                {{ t('select_field') }}
               </option>
               <option
                 v-for="(field, index) in selectFieldsForSubmitter(submitter)"
                 :key="index"
                 :value="field.name"
                 :selected="mapping.field_name === field.name"
+                class="text-base-content"
               >
                 {{ field.name }}
               </option>
@@ -75,6 +77,7 @@
             <div class="w-full relative">
               <select
                 class="base-select !select-sm !h-10"
+                :class="{ '!text-gray-300': !mapping.column_index && mapping.column_index != 0 }"
                 required
                 @change="mapping.column_index = parseInt($event.target.value)"
               >
@@ -83,7 +86,7 @@
                   value=""
                   :selected="mapping.column_index == null"
                 >
-                  Select Column
+                  {{ t('select_column') }}
                 </option>
                 <template
                   v-for="(column, index) in columns"
@@ -93,6 +96,7 @@
                     v-if="column"
                     :value="index"
                     :selected="index === mapping.column_index"
+                    class="text-base-content"
                   >
                     {{ column }}
                   </option>
@@ -118,8 +122,8 @@
             </div>
             <div class="flex items-center pl-1">
               <span
-                class="tooltip tooltip-top"
-                data-tip="Remove"
+                class="tooltip tooltip-left"
+                :data-tip="t('remove')"
               >
                 <button
                   :disabled="mappings.filter((m) => m.submitter_uuid === submitter.uuid).length < 2"
@@ -138,7 +142,7 @@
             @click.prevent="addMapping(submitter)"
           >
             <IconPlus class="w-4 h-4" />
-            New Field Mapping
+            {{ t('new_field_mapping') }}
           </button>
         </div>
       </div>
@@ -146,14 +150,14 @@
         <input
           name="submissions_json"
           hidden
-          :value="JSON.stringify(submissionsData.slice(0, 1100))"
+          :value="multitenant ? JSON.stringify(submissionsData.slice(0, 1100)) : JSON.stringify(submissionsData)"
         >
       </div>
       <div
         class="px-3 border-y py-2 border-base-300 text-center w-full text-sm font-semibold"
       >
-        Total entries: {{ submissionsData.length }}
-        <template v-if="submissionsData.length >= 1000">
+        {{ t('total_entries') }}: {{ submissionsData.length }}
+        <template v-if="multitenant && submissionsData.length >= 1000">
           / 1000
         </template>
       </div>
@@ -187,10 +191,10 @@
               <div
                 class="font-medium text-lg mb-1"
               >
-                Upload CSV or XLSX Spreadsheet
+                {{ t('upload_csv_or_xlsx_spreadsheet') }}
               </div>
               <div class="text-sm">
-                <span class="font-medium">Click to Upload</span> or drag and drop files.
+                <span class="font-medium">{{ t('click_to_upload') }}</span> {{ t('or_drag_and_drop_files') }}
               </div>
             </div>
           </div>
@@ -210,11 +214,11 @@
         </label>
       </div>
       <div class="text-center mt-2">
-        Or <a
+        {{ t('or') }} <a
           :download="`${template.name}.csv`"
           :href="`data:text/csv;base64,${csvBase64}`"
           class="link font-medium"
-        >download</a> a spreadsheet to fill and import
+        >{{ t('download') }}</a> {{ t('a_sample_spreadsheet_to_fill_and_import') }}
       </div>
     </div>
   </div>
@@ -239,10 +243,20 @@ export default {
       type: Object,
       required: true
     },
+    multitenant: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     authenticityToken: {
       type: String,
       required: false,
       default: ''
+    },
+    i18n: {
+      type: Object,
+      required: false,
+      default: () => ({})
     }
   },
   data () {
@@ -265,11 +279,19 @@ export default {
 
         this.mappings.forEach((mapping) => {
           if (mapping.field_name && mapping.column_index != null) {
-            submittersIndex[mapping.submitter_uuid] ||= { uuid: mapping.submitter_uuid, fields: [] }
+            submittersIndex[mapping.submitter_uuid] ||= {
+              uuid: mapping.submitter_uuid,
+              role: this.submitters.find((s) => s.uuid === mapping.submitter_uuid).name,
+              fields: []
+            }
 
-            if (['name', 'email', 'phone'].includes(mapping.field_name.toLowerCase())) {
+            if (['name', 'email', 'phone', 'external_id'].includes(mapping.field_name.toLowerCase())) {
               submittersIndex[mapping.submitter_uuid][mapping.field_name.toLowerCase()] = row[mapping.column_index]
-            } else {
+            }
+
+            const fieldType = this.fieldTypesIndex[mapping.submitter_uuid]?.[mapping.field_name]
+
+            if (fieldType && fieldType !== 'phone') {
               submittersIndex[mapping.submitter_uuid].fields.push({
                 name: mapping.field_name, default_value: row[mapping.column_index], readonly: true
               })
@@ -278,7 +300,7 @@ export default {
         })
 
         if (Object.keys(submittersIndex).length !== 0) {
-          submissions.push({ submitters: Object.values(submittersIndex) })
+          submissions.push({ submitters: this.submitters.map((s) => submittersIndex[s.uuid]).filter(Boolean) })
         }
       })
 
@@ -306,6 +328,17 @@ export default {
     submitters () {
       return this.template.submitters
     },
+    fieldTypesIndex () {
+      return this.template.fields.reduce((acc, field) => {
+        acc[field.submitter_uuid] ||= {}
+
+        if (field.name) {
+          acc[field.submitter_uuid][field.name] = field.type
+        }
+
+        return acc
+      }, {})
+    },
     columns () {
       return this.table[0]
     },
@@ -313,7 +346,7 @@ export default {
       return this.$el.closest('form')
     },
     fieldTypes () {
-      return ['text', 'cells', 'date', 'number', 'radio', 'select', 'checkbox']
+      return ['text', 'cells', 'date', 'number', 'radio', 'select', 'checkbox', 'image']
     },
     defaultFields () {
       return [
@@ -334,6 +367,9 @@ export default {
     }
   },
   methods: {
+    t (key) {
+      return this.i18n[key] || key
+    },
     onDropFiles (e) {
       this.uploadFile(e.dataTransfer.files[0])
     },
@@ -351,7 +387,13 @@ export default {
           this.defaultFields.every((f) => field.name?.toLowerCase() !== f.name?.toLowerCase())
       })
 
-      return [...this.defaultFields, ...templateFields]
+      const fields = [...this.defaultFields, ...templateFields]
+
+      if (this.spreadsheet && this.columns.includes('external_id')) {
+        fields.push({ name: 'external_id' })
+      }
+
+      return fields
     },
     buildDefaultMappings () {
       this.submitters.forEach((submitter) => {
@@ -364,7 +406,7 @@ export default {
               this.mappings.every((m) => m.column_index !== index)
           })
 
-          if (columnIndex !== -1) {
+          if (columnIndex !== -1 && this.rows.some((row) => row[columnIndex])) {
             this.mappings.push({ uuid: v4(), field_name: field.name, column_index: columnIndex, submitter_uuid: submitter.uuid })
           }
         })

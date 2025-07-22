@@ -31,10 +31,6 @@ button[disabled] .enabled {
   display: none;
 }
 
-select:required:invalid {
-  @apply text-gray-300;
-}
-
 .input-bordered {
   @apply border-base-content/20;
 }
@@ -73,4 +69,12 @@ select:required:invalid {
 
 .base-radio {
   @apply radio bg-white radio-sm;
+}
+
+.font-times {
+  font-family: "Times New Roman", Times, ui-serif, serif, Cambria, Georgia;
+}
+
+.font-courier {
+  font-family: "Courier New", Consolas, "Liberation Mono", monospace, ui-monospace, SFMono-Regular, Menlo, Monaco;
 }

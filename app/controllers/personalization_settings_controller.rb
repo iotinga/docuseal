@@ -6,7 +6,8 @@ class PersonalizationSettingsController < ApplicationController
     AccountConfig::SUBMITTER_INVITATION_EMAIL_KEY,
     AccountConfig::SUBMITTER_DOCUMENTS_COPY_EMAIL_KEY,
     AccountConfig::SUBMITTER_COMPLETED_EMAIL_KEY,
-    AccountConfig::FORM_COMPLETED_MESSAGE_KEY
+    AccountConfig::FORM_COMPLETED_MESSAGE_KEY,
+    *(Docuseal.multitenant? ? [] : [AccountConfig::POLICY_LINKS_KEY])
   ].freeze
 
   InvalidKey = Class.new(StandardError)
@@ -30,7 +31,7 @@ class PersonalizationSettingsController < ApplicationController
       @account_config.save!
     end
 
-    redirect_back(fallback_location: settings_personalization_path, notice: 'Settings have been saved.')
+    redirect_back(fallback_location: settings_personalization_path, notice: I18n.t('settings_have_been_saved'))
   end
 
   private
@@ -49,7 +50,7 @@ class PersonalizationSettingsController < ApplicationController
   end
 
   def account_config_params
-    attrs = params.require(:account_config).permit!
+    attrs = params.require(:account_config).permit(:key, :value, { value: {} }, { value: [] })
 
     return attrs if attrs[:value].is_a?(String)
 

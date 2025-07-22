@@ -8,12 +8,12 @@
     />
     <div class="modal-box pt-4 pb-6 px-6 mt-20 max-h-none w-full max-w-xl">
       <div class="flex justify-between items-center border-b pb-2 mb-2 font-medium">
-        <span>
-          {{ t('condition') }} - {{ field.name || buildDefaultName(field, template.fields) }}
+        <span class="modal-title">
+          {{ t('condition') }} - {{ item.name || buildDefaultName(item, template.fields) }}
         </span>
         <a
           href="#"
-          class="text-xl"
+          class="text-xl modal-close-button"
           @click.prevent="$emit('close')"
         >&times;</a>
       </div>
@@ -23,25 +23,36 @@
           class="bg-base-300 rounded-xl py-2 px-3 text-center"
         >
           <a
-            href="https://www.docuseal.co/pricing"
+            href="https://www.docuseal.com/pricing"
             target="_blank"
             class="link"
-          >Available in Pro</a>
+          >{{ t('available_in_pro') }}</a>
         </div>
         <form @submit.prevent="validateSaveAndClose">
-          <div class="my-4 space-y-5">
+          <div class="my-4">
             <div
               v-for="(condition, cindex) in conditions"
               :key="cindex"
               class="space-y-4 relative"
             >
               <div
-                v-if="conditions.length > 1"
-                class="flex justify-between border-b mx-1 -mb-1 pb-1"
+                v-if="cindex > 0"
+                class="divider -mb-2 mx-1"
               >
-                <span class="text-sm">
+                <button
+                  class="btn btn-xs btn-primary w-24"
+                  @click.prevent="condition.operation === 'or' ? delete condition.operation : condition.operation = 'or'"
+                >
+                  {{ condition.operation === 'or' ? t('or') : t('and') }}
+                </button>
+              </div>
+              <div
+                v-if="conditions.length > 1"
+                class="flex justify-between mx-1"
+              >
+                <label class="text-sm">
                   {{ t('condition') }} {{ cindex + 1 }}
-                </span>
+                </label>
                 <a
                   href="#"
                   class="link text-sm"
@@ -50,6 +61,7 @@
               </div>
               <select
                 class="select select-bordered select-sm w-full bg-white h-11 pl-4 text-base font-normal"
+                :class="{ 'text-gray-300': !condition.field_uuid }"
                 required
                 @change="[
                   condition.field_uuid = $event.target.value,
@@ -68,6 +80,7 @@
                   v-for="f in fields"
                   :key="f.uuid"
                   :value="f.uuid"
+                  class="text-base-content"
                   :selected="condition.field_uuid === f.uuid"
                 >
                   {{ f.name || buildDefaultName(f, template.fields) }}
@@ -88,8 +101,9 @@
                 </option>
               </select>
               <select
-                v-if="conditionField(condition)?.options?.length"
+                v-if="['radio', 'select', 'multiple'].includes(conditionField(condition)?.type) && conditionField(condition)?.options"
                 class="select select-bordered select-sm w-full bg-white h-11 pl-4 text-base font-normal"
+                :class="{ 'text-gray-300': !condition.value }"
                 required
                 @change="condition.value = $event.target.value"
               >
@@ -105,6 +119,7 @@
                   :key="option.uuid"
                   :value="option.uuid"
                   :selected="condition.value === option.uuid"
+                  class="text-base-content"
                 >
                   {{ option.value || `${t('option')} ${index + 1}` }}
                 </option>
@@ -116,19 +131,17 @@
             class="inline float-right link text-right mb-3 px-2"
             @click.prevent="conditions.push({})"
           > + {{ t('add_condition') }}</a>
-          <button
-            class="base-button w-full mt-2"
-          >
+          <button class="base-button w-full mt-2 modal-save-button">
             {{ t('save') }}
           </button>
         </form>
         <div
-          v-if="field.conditions?.[0]?.field_uuid"
+          v-if="item.conditions?.[0]?.field_uuid"
           class="text-center w-full mt-4"
         >
           <button
             class="link"
-            @click="[conditions = [], delete field.conditions, validateSaveAndClose()]"
+            @click="[conditions = [], delete item.conditions, validateSaveAndClose()]"
           >
             {{ t('remove_condition') }}
           </button>
@@ -143,7 +156,7 @@ export default {
   name: 'ConditionModal',
   inject: ['t', 'save', 'template', 'withConditions'],
   props: {
-    field: {
+    item: {
       type: Object,
       required: true
     },
@@ -155,22 +168,26 @@ export default {
   emits: ['close'],
   data () {
     return {
-      conditions: this.field.conditions?.[0] ? JSON.parse(JSON.stringify(this.field.conditions)) : [{}]
+      conditions: this.item.conditions?.[0] ? JSON.parse(JSON.stringify(this.item.conditions)) : [{}]
     }
   },
   computed: {
     fields () {
-      return this.template.fields.reduce((acc, f) => {
-        if (f !== this.field && f.submitter_uuid === this.field.submitter_uuid) {
-          acc.push(f)
-        }
+      if (this.item.submitter_uuid) {
+        return this.template.fields.reduce((acc, f) => {
+          if (f !== this.item && (!f.conditions?.length || !f.conditions.find((c) => c.field_uuid === this.item.uuid))) {
+            acc.push(f)
+          }
 
-        return acc
-      }, [])
+          return acc
+        }, [])
+      } else {
+        return this.template.fields
+      }
     }
   },
   created () {
-    this.field.conditions ||= []
+    this.item.conditions ||= []
   },
   methods: {
     conditionField (condition) {
@@ -200,13 +217,13 @@ export default {
     },
     validateSaveAndClose () {
       if (!this.withConditions) {
-        return alert('Available only in Pro')
+        return alert(this.t('available_only_in_pro'))
       }
 
       if (this.conditions.find((f) => f.field_uuid)) {
-        this.field.conditions = this.conditions
+        this.item.conditions = this.conditions
       } else {
-        delete this.field.conditions
+        delete this.item.conditions
       }
 
       this.save()

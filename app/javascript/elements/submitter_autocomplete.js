@@ -24,6 +24,7 @@ export default class extends HTMLElement {
 
       if (input && item[field]) {
         input.value = item[field]
+        input.dispatchEvent(new CustomEvent('linked-input.update', { bubbles: true }))
       }
 
       if (textarea && item[field]) {
@@ -35,7 +36,9 @@ export default class extends HTMLElement {
   }
 
   fetch = (text, resolve) => {
-    const q = text.split(/[;,\s]+/).pop().trim()
+    const q = this.dataset.field === 'email'
+      ? text.split(/[;,\s]+/).pop().trim()
+      : text
 
     if (q) {
       const queryParams = new URLSearchParams({ q, field: this.dataset.field })

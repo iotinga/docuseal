@@ -27,7 +27,34 @@
     </label>
   </div>
   <div
-    v-if="['number'].includes(field.type)"
+    v-if="field.type === 'verification'"
+    class="py-1.5 px-1 relative"
+    @click.stop
+  >
+    <select
+      :placeholder="t('method')"
+      class="select select-bordered select-xs font-normal w-full max-w-xs !h-7 !outline-0 bg-transparent"
+      @change="[field.preferences ||= {}, field.preferences.method = $event.target.value, save()]"
+    >
+      <option
+        v-for="method in ['QeS', 'AeS']"
+        :key="method"
+        :value="method.toLowerCase()"
+        :selected="method.toLowerCase() === field.preferences?.method || (method === 'QeS' && !field.preferences?.method)"
+      >
+        {{ method }}
+      </option>
+    </select>
+    <label
+      :style="{ backgroundColor }"
+      class="absolute -top-1 left-2.5 px-1 h-4"
+      style="font-size: 8px"
+    >
+      {{ t('method') }}
+    </label>
+  </div>
+  <div
+    v-if="['cells'].includes(field.type)"
     class="py-1.5 px-1 relative"
     @click.stop
   >
@@ -36,7 +63,7 @@
       @change="[field.preferences ||= {}, field.preferences.align = $event.target.value, save()]"
     >
       <option
-        v-for="value in ['left', 'right', 'center']"
+        v-for="value in ['left', 'right', field.type === 'cells' ? null : 'center'].filter(Boolean)"
         :key="value"
         :selected="field.preferences?.align ? value === field.preferences.align : value === 'left'"
         :value="value"
@@ -50,6 +77,40 @@
       style="font-size: 8px"
     >
       {{ t('align') }}
+    </label>
+  </div>
+  <div
+    v-if="['select', 'radio'].includes(field.type) && !defaultField"
+    class="py-1.5 px-1 relative"
+    @click.stop
+  >
+    <select
+      :placeholder="t('default_value')"
+      dir="auto"
+      class="select select-bordered select-xs w-full max-w-xs h-7 !outline-0 font-normal bg-transparent"
+      @change="[field.default_value = $event.target.value, !field.default_value && delete field.default_value, save()]"
+    >
+      <option
+        value=""
+        :selected="!field.default_value"
+      >
+        {{ t('none') }}
+      </option>
+      <option
+        v-for="(option, index) in field.options || []"
+        :key="option.uuid"
+        :value="option.value || `${t('option')} ${index + 1}`"
+        :selected="field.default_value === (option.value || `${t('option')} ${index + 1}`)"
+      >
+        {{ option.value || `${t('option')} ${index + 1}` }}
+      </option>
+    </select>
+    <label
+      :style="{ backgroundColor }"
+      class="absolute -top-1 left-2.5 px-1 h-4"
+      style="font-size: 8px"
+    >
+      {{ t('default_value') }}
     </label>
   </div>
   <div
@@ -72,6 +133,131 @@
       style="font-size: 8px"
     >
       {{ t('default_value') }}
+    </label>
+  </div>
+  <div
+    v-if="['text', 'cells'].includes(field.type)"
+    class="py-1.5 px-1 relative"
+    @click.stop
+  >
+    <select
+      class="select select-bordered select-xs w-full max-w-xs h-7 !outline-0 font-normal bg-transparent"
+      @change="onChangeValidation"
+    >
+      <option
+        :selected="!field.validation"
+        value=""
+      >
+        {{ t('none') }}
+      </option>
+      <option
+        v-for="(key, value) in validations"
+        :key="key"
+        :selected="lengthValidation ? key == 'length' : (field.validation?.pattern ? value === field.validation.pattern : key === 'none')"
+        :value="key"
+      >
+        {{ t(key) }}
+      </option>
+      <option
+        :selected="field.validation && !validations[field.validation.pattern] && !lengthValidation"
+        :value="validations[field.validation?.pattern] || !field.validation?.pattern ? 'custom' : field.validation?.pattern"
+      >
+        {{ t('custom') }}
+      </option>
+    </select>
+    <label
+      :style="{ backgroundColor }"
+      class="absolute -top-1 left-2.5 px-1 h-4"
+      style="font-size: 8px"
+    >
+      {{ t('validation') }}
+    </label>
+  </div>
+  <div
+    v-if="['text', 'cells'].includes(field.type) && field.validation && lengthValidation"
+    class="py-1.5 px-1 relative flex space-x-1"
+    @click.stop
+  >
+    <div class="w-1/2 relative">
+      <input
+        :placeholder="t('min')"
+        type="number"
+        min="0"
+        :value="lengthValidation.min"
+        class="input input-bordered w-full input-xs h-7 !outline-0 bg-transparent"
+        @input="field.validation.pattern = `.{${$event.target.value || 0},${lengthValidation.max || ''}}`"
+        @blur="save"
+      >
+      <label
+        v-if="lengthValidation.min"
+        :style="{ backgroundColor }"
+        class="absolute -top-2.5 left-1.5 px-1 h-4"
+        style="font-size: 8px"
+      >
+        {{ t('min') }}
+      </label>
+    </div>
+    <div class="w-1/2 relative">
+      <input
+        :placeholder="t('max')"
+        type="number"
+        min="1"
+        class="input input-bordered w-full input-xs h-7 !outline-0 bg-transparent"
+        :value="lengthValidation.max"
+        @input="field.validation.pattern = `.{${lengthValidation.min},${$event.target.value || ''}}`"
+        @blur="save"
+      >
+      <label
+        v-if="lengthValidation.max"
+        :style="{ backgroundColor }"
+        class="absolute -top-2.5 left-1.5 px-1 h-4"
+        style="font-size: 8px"
+      >
+        {{ t('max') }}
+      </label>
+    </div>
+  </div>
+  <div
+    v-if="['text', 'cells'].includes(field.type) && field.validation && !validations[field.validation.pattern] && !lengthValidation"
+    class="py-1.5 px-1 relative"
+    @click.stop
+  >
+    <input
+      ref="validationCustom"
+      v-model="field.validation.pattern"
+      :placeholder="t('regexp_validation')"
+      dir="auto"
+      class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0 bg-transparent"
+      @blur="save"
+    >
+    <label
+      v-if="field.validation.pattern"
+      :style="{ backgroundColor }"
+      class="absolute -top-1 left-2.5 px-1 h-4"
+      style="font-size: 8px"
+    >
+      {{ t('regexp_validation') }}
+    </label>
+  </div>
+  <div
+    v-if="['text', 'cells'].includes(field.type) && field.validation && !validations[field.validation.pattern] && !lengthValidation"
+    class="py-1.5 px-1 relative"
+    @click.stop
+  >
+    <input
+      v-model="field.validation.message"
+      :placeholder="t('error_message')"
+      dir="auto"
+      class="input input-bordered input-xs w-full max-w-xs h-7 !outline-0 bg-transparent"
+      @blur="save"
+    >
+    <label
+      v-if="field.validation.message"
+      :style="{ backgroundColor }"
+      class="absolute -top-1 left-2.5 px-1 h-4"
+      style="font-size: 8px"
+    >
+      {{ t('error_message') }}
     </label>
   </div>
   <div
@@ -118,16 +304,12 @@
         {{ t('any') }}
       </option>
       <option
-        value="drawn"
-        :selected="field.preferences?.format === 'drawn'"
+        v-for="type in ['drawn', 'typed', 'drawn_or_typed', 'upload']"
+        :key="type"
+        :value="type"
+        :selected="field.preferences?.format === type"
       >
-        {{ t('drawn') }}
-      </option>
-      <option
-        value="typed"
-        :selected="field.preferences?.format === 'typed'"
-      >
-        {{ t('typed') }}
+        {{ t(type) }}
       </option>
     </select>
     <label
@@ -139,14 +321,29 @@
     </label>
   </div>
   <li
-    v-if="withRequired && field.type != 'phone' && field.type != 'stamp'"
+    v-if="[true, false].includes(withSignatureId) && field.type === 'signature'"
+    @click.stop
+  >
+    <label class="cursor-pointer py-1.5">
+      <input
+        :checked="field.preferences?.with_signature_id"
+        type="checkbox"
+        :disabled="!editable || (defaultField && [true, false].includes(defaultField.required))"
+        class="toggle toggle-xs"
+        @change="[field.preferences ||= {}, field.preferences.with_signature_id = $event.target.checked, save()]"
+      >
+      <span class="label-text">{{ t('signature_id') }}</span>
+    </label>
+  </li>
+  <li
+    v-if="withRequired && field.type !== 'phone' && field.type !== 'stamp' && field.type !== 'verification'"
     @click.stop
   >
     <label class="cursor-pointer py-1.5">
       <input
         v-model="field.required"
         type="checkbox"
-        :disabled="!editable || defaultField"
+        :disabled="!editable || (defaultField && [true, false].includes(defaultField.required))"
         class="toggle toggle-xs"
         @update:model-value="save"
       >
@@ -213,6 +410,19 @@
     v-if="field.type != 'stamp'"
     class="pb-0.5 mt-0.5"
   >
+  <li v-if="['text', 'number', 'date', 'select'].includes(field.type)">
+    <label
+      class="label-text cursor-pointer text-center w-full flex items-center"
+      @click="$emit('click-font')"
+    >
+      <IconTypography
+        width="18"
+      />
+      <span class="text-sm">
+        {{ t('font') }}
+      </span>
+    </label>
+  </li>
   <li
     v-if="field.type != 'stamp'"
   >
@@ -264,7 +474,7 @@
     >
       <a
         href="#"
-        class="text-sm py-1 px-2"
+        class="text-sm py-1 px-2 group/1"
         @click.prevent="$emit('scroll-to', area)"
       >
         <IconShape
@@ -273,6 +483,11 @@
         />
         {{ t('page') }}
         <template v-if="template.schema.length > 1">{{ template.schema.findIndex((item) => item.attachment_uuid === area.attachment_uuid) + 1 }}-</template>{{ area.page + 1 }}
+        <IconX
+          :width="12"
+          class="group-hover/1:inline hidden"
+          @click.prevent.stop="[$emit('remove-area', area), $event.target.closest('.dropdown').querySelector('label').focus()]"
+        />
       </a>
     </li>
     <li v-if="!field.areas?.length || !['radio', 'multiple'].includes(field.type)">
@@ -289,7 +504,7 @@
       </a>
     </li>
   </template>
-  <li v-if="field.areas?.length === 1 && ['date', 'signature', 'initials', 'text', 'cells'].includes(field.type)">
+  <li v-if="field.areas?.length === 1 && ['date', 'signature', 'initials', 'text', 'cells', 'stamp'].includes(field.type)">
     <a
       href="#"
       class="text-sm py-1 px-2"
@@ -305,7 +520,7 @@
 </template>
 
 <script>
-import { IconRouteAltLeft, IconShape, IconMathFunction, IconNewSection, IconInfoCircle, IconCopy } from '@tabler/icons-vue'
+import { IconRouteAltLeft, IconTypography, IconShape, IconX, IconMathFunction, IconNewSection, IconInfoCircle, IconCopy } from '@tabler/icons-vue'
 
 export default {
   name: 'FieldSettings',
@@ -315,13 +530,20 @@ export default {
     IconMathFunction,
     IconRouteAltLeft,
     IconCopy,
-    IconNewSection
+    IconNewSection,
+    IconTypography,
+    IconX
   },
   inject: ['template', 'save', 't'],
   props: {
     field: {
       type: Object,
       required: true
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
     },
     backgroundColor: {
       type: String,
@@ -349,9 +571,10 @@ export default {
       default: true
     }
   },
-  emits: ['set-draw', 'scroll-to', 'click-formula', 'click-description', 'click-condition'],
+  emits: ['set-draw', 'scroll-to', 'click-formula', 'click-description', 'click-condition', 'click-font', 'remove-area'],
   data () {
     return {
+      selectedValidation: ''
     }
   },
   computed: {
@@ -365,6 +588,9 @@ export default {
     numberFormats () {
       return [
         'none',
+        'usd',
+        'eur',
+        'gbp',
         'comma',
         'dot',
         'space'
@@ -393,6 +619,25 @@ export default {
 
       return formats
     },
+    lengthValidation () {
+      if (this.field.validation?.pattern && this.selectedValidation !== 'custom') {
+        return this.field.validation.pattern.match(/^\.{(?<min>\d+),(?<max>\d+)?}$/)?.groups
+      } else {
+        return null
+      }
+    },
+    validations () {
+      return {
+        '.{0,}': 'length',
+        '^[0-9]{3}-[0-9]{2}-[0-9]{4}$': 'ssn',
+        '^[0-9]{2}-[0-9]{7}$': 'ein',
+        '^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$': 'email',
+        '^https?://.*': 'url',
+        '^[0-9]{5}(?:-[0-9]{4})?$': 'zip',
+        '^[0-9]+$': 'numbers_only',
+        '^[a-zA-Z]+$': 'letters_only'
+      }
+    },
     sortedAreas () {
       return (this.field.areas || []).sort((a, b) => {
         return this.schemaAttachmentsIndexes[a.attachment_uuid] - this.schemaAttachmentsIndexes[b.attachment_uuid]
@@ -400,6 +645,28 @@ export default {
     }
   },
   methods: {
+    onChangeValidation (event) {
+      if (event.target.value === 'custom') {
+        this.selectedValidation = 'custom'
+
+        this.field.validation = { pattern: '', message: '' }
+
+        this.$nextTick(() => this.$refs.validationCustom.focus())
+      } else if (event.target.value) {
+        this.field.validation ||= {}
+        this.field.validation.pattern =
+          Object.keys(this.validations).find(key => this.validations[key] === event.target.value)
+
+        this.selectedValidation = event.target.value
+        delete this.field.validation.message
+      } else {
+        this.selectedValidation = ''
+
+        delete this.field.validation
+      }
+
+      this.save()
+    },
     copyToAllPages (field) {
       const areaString = JSON.stringify(field.areas[0])
 
@@ -420,6 +687,12 @@ export default {
     formatNumber (number, format) {
       if (format === 'comma') {
         return new Intl.NumberFormat('en-US').format(number)
+      } else if (format === 'usd') {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
+      } else if (format === 'gbp') {
+        return new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
+      } else if (format === 'eur') {
+        return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(number)
       } else if (format === 'dot') {
         return new Intl.NumberFormat('de-DE').format(number)
       } else if (format === 'space') {

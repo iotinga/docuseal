@@ -1,7 +1,9 @@
 <template>
   <div
-    class="relative cursor-crosshair select-none"
-    :style="drawField ? 'touch-action: none' : ''"
+    class="relative select-none mb-4 before:border before:rounded before:top-0 before:bottom-0 before:left-0 before:right-0 before:absolute"
+    :class="{ 'cursor-crosshair': allowDraw, 'touch-none': !!drawField }"
+    style="container-type: size"
+    :style="{ aspectRatio: `${width} / ${height}`}"
   >
     <img
       ref="image"
@@ -9,7 +11,7 @@
       :src="image.url"
       :width="width"
       :height="height"
-      class="border rounded mb-4"
+      class="rounded"
       @load="onImageLoad"
     >
     <div
@@ -21,33 +23,37 @@
         :key="i"
         :ref="setAreaRefs"
         :area="item.area"
+        :input-mode="inputMode"
         :field="item.field"
         :editable="editable"
-        :default-field="defaultFields.find((f) => f.name === item.field.name)"
+        :with-field-placeholder="withFieldPlaceholder"
+        :with-signature-id="withSignatureId"
+        :default-field="defaultFieldsIndex[item.field.name]"
         :default-submitters="defaultSubmitters"
+        :max-page="totalPages - 1"
         @start-resize="resizeDirection = $event"
         @stop-resize="resizeDirection = null"
-        @start-drag="isMove = true"
-        @stop-drag="isMove = false"
         @remove="$emit('remove-area', item.area)"
         @scroll-to="$emit('scroll-to', $event)"
       />
       <FieldArea
         v-if="newArea"
         :is-draw="true"
-        :field="{ submitter_uuid: selectedSubmitter.uuid, type: drawField?.type || defaultFieldType }"
+        :field="{ submitter_uuid: selectedSubmitter.uuid, type: drawField?.type || dragFieldPlaceholder?.type || defaultFieldType }"
         :area="newArea"
       />
     </div>
     <div
-      v-show="resizeDirection || isMove || isDrag || showMask || (drawField && isMobile) || fieldsDragFieldRef.value"
+      v-show="resizeDirection || isDrag || showMask || (drawField && isMobile) || fieldsDragFieldRef.value"
       id="mask"
       ref="mask"
       class="top-0 bottom-0 left-0 right-0 absolute"
-      :class="{ 'z-10': !isMobile, 'cursor-grab': isDrag || isMove, 'cursor-nwse-resize': drawField, [resizeDirectionClasses[resizeDirection]]: !!resizeDirectionClasses }"
+      :class="{ 'z-10': !isMobile, 'cursor-grab': isDrag, 'cursor-nwse-resize': drawField, [resizeDirectionClasses[resizeDirection]]: !!resizeDirectionClasses }"
       @pointermove="onPointermove"
       @pointerdown="onStartDraw"
-      @dragover.prevent
+      @dragover.prevent="onDragover"
+      @dragenter="onDragenter"
+      @dragleave="newArea = null"
       @drop="onDrop"
       @pointerup="onPointerup"
     />
@@ -62,21 +68,45 @@ export default {
   components: {
     FieldArea
   },
-  inject: ['fieldTypes', 'defaultDrawFieldType', 'fieldsDragFieldRef'],
+  inject: ['fieldTypes', 'defaultDrawFieldType', 'fieldsDragFieldRef', 'assignDropAreaSize'],
   props: {
     image: {
       type: Object,
       required: true
+    },
+    dragFieldPlaceholder: {
+      type: Object,
+      required: false,
+      default: null
+    },
+    withSignatureId: {
+      type: Boolean,
+      required: false,
+      default: null
     },
     areas: {
       type: Array,
       required: false,
       default: () => []
     },
+    inputMode: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
     defaultFields: {
       type: Array,
       required: false,
       default: () => []
+    },
+    withFieldPlaceholder: {
+      type: Boolean,
+      required: false,
+      default: false
+    },
+    totalPages: {
+      type: Number,
+      required: true
     },
     drawFieldType: {
       type: String,
@@ -122,12 +152,18 @@ export default {
     return {
       areaRefs: [],
       showMask: false,
-      isMove: false,
       resizeDirection: null,
       newArea: null
     }
   },
   computed: {
+    defaultFieldsIndex () {
+      return this.defaultFields.reduce((acc, field) => {
+        acc[field.name] = field
+
+        return acc
+      }, {})
+    },
     defaultFieldType () {
       if (this.drawFieldType) {
         return this.drawFieldType
@@ -140,7 +176,9 @@ export default {
       }
     },
     isMobile () {
-      return /android|iphone|ipad/i.test(navigator.userAgent)
+      const isMobileSafariIos = 'ontouchstart' in window && navigator.maxTouchPoints > 0 && /AppleWebKit/i.test(navigator.userAgent)
+
+      return isMobileSafariIos || /android|iphone|ipad/i.test(navigator.userAgent)
     },
     resizeDirectionClasses () {
       return {
@@ -160,15 +198,32 @@ export default {
   },
   methods: {
     onImageLoad (e) {
-      e.target.setAttribute('width', e.target.naturalWidth)
-      e.target.setAttribute('height', e.target.naturalHeight)
+      this.image.metadata.width = e.target.naturalWidth
+      this.image.metadata.height = e.target.naturalHeight
     },
     setAreaRefs (el) {
       if (el) {
         this.areaRefs.push(el)
       }
     },
+    onDragenter (e) {
+      this.newArea = {}
+
+      this.assignDropAreaSize(this.newArea, this.dragFieldPlaceholder, {
+        maskW: this.$refs.mask.clientWidth,
+        maskH: this.$refs.mask.clientHeight
+      })
+
+      this.newArea.x = (e.offsetX - 6) / this.$refs.mask.clientWidth
+      this.newArea.y = e.offsetY / this.$refs.mask.clientHeight - this.newArea.h / 2
+    },
+    onDragover (e) {
+      this.newArea.x = (e.offsetX - 6) / this.$refs.mask.clientWidth
+      this.newArea.y = e.offsetY / this.$refs.mask.clientHeight - this.newArea.h / 2
+    },
     onDrop (e) {
+      this.newArea = null
+
       this.$emit('drop-field', {
         x: e.offsetX,
         y: e.offsetY,
@@ -242,7 +297,12 @@ export default {
           area.cell_w = this.newArea.cell_w
         }
 
-        this.$emit('draw', area)
+        const dx = Math.abs(e.offsetX - this.$refs.mask.clientWidth * this.newArea.initialX)
+        const dy = Math.abs(e.offsetY - this.$refs.mask.clientHeight * this.newArea.initialY)
+
+        const isTooSmall = dx < 8 && dy < 8
+
+        this.$emit('draw', { area, isTooSmall })
       }
 
       this.showMask = false

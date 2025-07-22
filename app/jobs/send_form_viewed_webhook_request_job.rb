@@ -1,44 +1,35 @@
 # frozen_string_literal: true
 
-class SendFormViewedWebhookRequestJob < ApplicationJob
-  queue_as :webhooks
+class SendFormViewedWebhookRequestJob
+  include Sidekiq::Job
 
-  USER_AGENT = 'DocuSeal.co Webhook'
+  sidekiq_options queue: :webhooks
 
   MAX_ATTEMPTS = 10
 
-  def perform(submitter, params = {})
-    attempt = params[:attempt].to_i
-    url = Accounts.load_webhook_url(submitter.submission.account)
+  def perform(params = {})
+    submitter = Submitter.find(params['submitter_id'])
+    webhook_url = WebhookUrl.find(params['webhook_url_id'])
 
-    return if url.blank?
+    attempt = params['attempt'].to_i
 
-    preferences = Accounts.load_webhook_preferences(submitter.submission.account)
-
-    return if preferences['form.viewed'] == false
+    return if webhook_url.url.blank? || webhook_url.events.exclude?('form.viewed')
 
     ActiveStorage::Current.url_options = Docuseal.default_url_options
 
-    resp = begin
-      Faraday.post(url,
-                   {
-                     event_type: 'form.viewed',
-                     timestamp: Time.current,
-                     data: Submitters::SerializeForWebhook.call(submitter)
-                   }.to_json,
-                   'Content-Type' => 'application/json',
-                   'User-Agent' => USER_AGENT)
-    rescue Faraday::Error
-      nil
-    end
+    resp = SendWebhookRequest.call(webhook_url, event_type: 'form.viewed',
+                                                event_uuid: params['event_uuid'],
+                                                record: submitter,
+                                                attempt:,
+                                                data: Submitters::SerializeForWebhook.call(submitter))
 
     if (resp.nil? || resp.status.to_i >= 400) && attempt <= MAX_ATTEMPTS &&
        (!Docuseal.multitenant? || submitter.account.account_configs.exists?(key: :plan))
-      SendFormViewedWebhookRequestJob.set(wait: (2**attempt).minutes)
-                                     .perform_later(submitter, {
-                                                      attempt: attempt + 1,
-                                                      last_status: resp&.status.to_i
-                                                    })
+      SendFormViewedWebhookRequestJob.perform_in((2**attempt).minutes, {
+                                                   **params,
+                                                   'attempt' => attempt + 1,
+                                                   'last_status' => resp&.status.to_i
+                                                 })
     end
   end
 end
